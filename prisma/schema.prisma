@@ -1,0 +1,61 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Agency {
+  id          String   @id @default(uuid())
+  name        String
+  apiUrl      String?
+  apiKey      String?
+  integrationType String @default("API") // API, FEED, REDIRECT
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  listings    Listing[]
+}
+
+model Listing {
+  id            String   @id @default(uuid())
+  agencyId      String
+  agency        Agency   @relation(fields: [agencyId], references: [id])
+  
+  // Car Details
+  brand         String
+  model         String
+  variant       String?
+  year          Int
+  mileage       Int      // in kilometers
+  price         Float
+  currency      String   @default("INR")
+  
+  // Additional Details
+  color         String?
+  fuelType      String?  // Petrol, Diesel, Electric, Hybrid
+  transmission  String?  // Manual, Automatic
+  bodyType      String?  // Sedan, SUV, Hatchback, etc.
+  
+  // Location
+  city          String?
+  state         String?
+  country       String?
+  
+  // Availability
+  isAvailable   Boolean  @default(true)
+  externalUrl   String?  // URL to agency's listing
+  
+  // Metadata
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([brand, model, year])
+  @@index([agencyId])
+  @@index([isAvailable])
+}
