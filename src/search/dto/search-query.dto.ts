@@ -17,7 +17,7 @@ export class SearchQueryDto {
   @IsInt()
   @Type(() => Number)
   @IsOptional()
-  @Min(1900)
+  @Min(0)
   @Max(new Date().getFullYear() + 1)
   year?: number;
 
@@ -46,8 +46,7 @@ export class SearchQueryDto {
   minMileage?: number;
 
   @IsString()
-  @IsOptional()
-  city?: string;
+  city: string;
 
   @IsString()
   @IsOptional()
@@ -82,6 +81,9 @@ export class SearchQueryDto {
   @Type(() => Number)
   @IsOptional()
   @Min(1)
-  @Max(100)
-  limit?: number = 20;
+  limit?: number = 50;
+
+  @IsString()
+  @IsOptional()
+  sortBy?: string;
 }

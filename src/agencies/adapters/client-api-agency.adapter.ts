@@ -1,0 +1,121 @@
+import { Injectable } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { AgencySearchResult, RawAgencyListing } from '../interfaces/agency-adapter.interface';
+import { SearchQueryDto } from '../../search/dto/search-query.dto';
+import { PrismaService } from '../../prisma/prisma.service';
+
+@Injectable()
+export class ClientApiAgencyAdapter {
+  constructor(
+    private httpService: HttpService,
+    private prisma: PrismaService,
+  ) {}
+
+  async search(query: SearchQueryDto, agencyId: string): Promise<AgencySearchResult> {
+    const startTime = Date.now();
+
+    try {
+      const agency = await this.prisma.agency.findUnique({
+        where: { id: agencyId },
+        select: { id: true, name: true, apiUrl: true, apiKey: true, integrationType: true },
+      });
+
+      if (!agency) {
+        return {
+          agencyId,
+          agencyName: 'Unknown',
+          listings: [],
+          success: false,
+          error: 'Agency not found',
+          responseTime: Date.now() - startTime,
+        };
+      }
+
+      if (!agency.apiUrl) {
+        return {
+          agencyId,
+          agencyName: agency.name,
+          listings: [],
+          success: false,
+          error: 'API URL not configured',
+          responseTime: Date.now() - startTime,
+        };
+      }
+
+      const apiQuery = this.buildApiQuery(query);
+      const response = await this.httpService.axiosRef.get(agency.apiUrl, {
+        params: apiQuery,
+        headers: {
+          ...(agency.apiKey && { Authorization: `Bearer ${agency.apiKey}` }),
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      });
+
+      const listings = this.transformApiResponse(response.data, agencyId);
+
+      return {
+        agencyId,
+        agencyName: agency.name,
+        listings,
+        success: true,
+        responseTime: Date.now() - startTime,
+      };
+    } catch (error: any) {
+      return {
+        agencyId,
+        agencyName: 'Unknown',
+        listings: [],
+        success: false,
+        error: error.message || 'API request failed',
+        responseTime: Date.now() - startTime,
+      };
+    }
+  }
+
+  private buildApiQuery(query: SearchQueryDto): Record<string, any> {
+    const apiQuery: Record<string, any> = {};
+    if (query.brand) apiQuery.brand = query.brand;
+    if (query.model) apiQuery.model = query.model;
+    if (query.year) apiQuery.year = query.year;
+    if (query.minPrice !== undefined) apiQuery.minPrice = query.minPrice;
+    if (query.maxPrice !== undefined) apiQuery.maxPrice = query.maxPrice;
+    if (query.city) apiQuery.city = query.city;
+    if (query.state) apiQuery.state = query.state;
+    if (query.fuelType) apiQuery.fuelType = query.fuelType;
+    if (query.transmission) apiQuery.transmission = query.transmission;
+    if (query.bodyType) apiQuery.bodyType = query.bodyType;
+    if (query.minMileage !== undefined) apiQuery.minMileage = query.minMileage;
+    if (query.maxMileage !== undefined) apiQuery.maxMileage = query.maxMileage;
+    if (query.minYear) apiQuery.minYear = query.minYear;
+    return apiQuery;
+  }
+
+  private transformApiResponse(apiData: any, agencyId: string): RawAgencyListing[] {
+    const items = apiData.data || apiData.listings || apiData.results || apiData.items || [];
+    return items.map((item: any) => ({
+      id: item.id || item.listingId || `api-${Date.now()}-${Math.random()}`,
+      agencyId,
+      brand: item.brand || item.make || item.manufacturer,
+      make: item.make || item.manufacturer,
+      model: item.model || item.carModel,
+      variant: item.variant || item.trim,
+      trim: item.trim,
+      year: item.year || item.modelYear || item.myear,
+      mileage: item.mileage || item.odometer || item.km,
+      odometer: item.odometer || item.mileage,
+      price: item.price || item.listingPrice || item.priceAmount,
+      currency: item.currency || 'INR',
+      color: item.color || item.colour,
+      fuelType: item.fuelType || item.fuel,
+      transmission: item.transmission || item.gearType,
+      bodyType: item.bodyType || item.carType,
+      city: item.city || item.locationCity,
+      state: item.state || item.locationState,
+      country: item.country || 'India',
+      isAvailable: item.isAvailable !== false && item.status !== 'sold',
+      externalUrl: item.externalUrl || item.url || item.listingUrl,
+      ownership: item.ownership || item.owner,
+    }));
+  }
+}

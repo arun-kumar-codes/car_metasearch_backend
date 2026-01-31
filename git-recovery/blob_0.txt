@@ -1,0 +1,241 @@
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { SearchQueryDto } from './dto/search-query.dto';
+import { SearchResponseDto, ListingResponseDto } from './dto/listing-response.dto';
+import { AgencyOrchestratorService } from '../agencies/services/agency-orchestrator.service';
+import { NormalizationService } from '../agencies/services/normalization.service';
+import { ClicksService } from '../clicks/clicks.service';
+
+@Injectable()
+export class SearchService {
+  constructor(
+    private prisma: PrismaService,
+    private agencyOrchestrator: AgencyOrchestratorService,
+    private normalizationService: NormalizationService,
+    private clicksService: ClicksService,
+  ) {}
+
+  async search(query: SearchQueryDto): Promise<SearchResponseDto> {
+    const { page = 1, limit = 50, sortBy = 'price_asc' } = query;
+
+    const agencyResults = await this.agencyOrchestrator.searchAllAgencies(query);
+
+    const allListings: ListingResponseDto[] = [];
+
+    for (const result of agencyResults) {
+      if (result.success) {
+        const normalized = this.normalizationService.normalizeMany(
+          result.listings,
+          result.agencyName,
+        );
+        
+        const agency = await this.prisma.agency.findUnique({
+          where: { id: result.agencyId },
+          select: { cpc: true, integrationType: true },
+        });
+
+        const listingIds = normalized.map(l => l.id);
+        const clickCounts = await this.getClickCountsForListings(listingIds);
+
+        normalized.forEach((listing) => {
+          const baseUrl = `${process.env.API_BASE_URL || 'http://localhost:3377'}/click/${listing.id}`;
+          if (agency?.integrationType !== 'APIFY' && listing.externalUrl) {
+            const params = new URLSearchParams({
+              url: listing.externalUrl,
+              agencyId: result.agencyId,
+            });
+            listing.trackingUrl = `${baseUrl}?${params.toString()}`;
+          } else {
+            listing.trackingUrl = baseUrl;
+          }
+          
+          listing.clickCount = clickCounts[listing.id] || 0;
+          listing.agency.cpc = agency?.cpc || 0;
+        });
+        allListings.push(...normalized);
+      }
+    }
+
+    allListings.sort((a, b) => {
+      switch (sortBy) {
+        case 'price_asc':
+          if (a.price !== b.price) {
+            return a.price - b.price;
+          }
+          return b.year - a.year;
+        case 'price_desc':
+          if (a.price !== b.price) {
+            return b.price - a.price;
+          }
+          return b.year - a.year;
+        case 'year_desc':
+          if (a.year !== b.year) {
+            return b.year - a.year;
+          }
+          return a.price - b.price;
+        case 'year_asc':
+          if (a.year !== b.year) {
+            return a.year - b.year;
+          }
+          return a.price - b.price;
+        case 'mileage_asc':
+          if (a.mileage !== b.mileage) {
+            return a.mileage - b.mileage;
+          }
+          return a.price - b.price;
+        case 'mileage_desc':
+          if (a.mileage !== b.mileage) {
+            return b.mileage - a.mileage;
+          }
+          return a.price - b.price;
+        default:
+      if (a.price !== b.price) {
+        return a.price - b.price;
+      }
+      return b.year - a.year;
+      }
+    });
+
+    const total = allListings.length;
+    const skip = (page - 1) * limit;
+    const paginatedListings = allListings.slice(skip, skip + limit);
+
+    return {
+      listings: paginatedListings,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async getBrands(): Promise<string[]> {
+    const brands = await this.prisma.listing.findMany({
+      select: {
+        brand: true,
+      },
+      distinct: ['brand'],
+      orderBy: {
+        brand: 'asc',
+      },
+    });
+
+    return brands.map((b) => b.brand);
+  }
+
+  async getModels(brand?: string): Promise<string[]> {
+    const where = brand ? { brand } : {};
+    const models = await this.prisma.listing.findMany({
+      where,
+      select: {
+        model: true,
+      },
+      distinct: ['model'],
+      orderBy: {
+        model: 'asc',
+      },
+    });
+
+    return models.map((m) => m.model);
+  }
+
+  async getBodyTypes(): Promise<string[]> {
+    const bodyTypes = await this.prisma.listing.findMany({
+      where: {
+        isAvailable: true,
+        bodyType: { not: null },
+      },
+      select: {
+        bodyType: true,
+      },
+      distinct: ['bodyType'],
+      orderBy: {
+        bodyType: 'asc',
+      },
+    });
+
+    return bodyTypes
+      .map((bt) => bt.bodyType)
+      .filter((bodyType): bodyType is string => bodyType !== null && bodyType !== undefined)
+      .sort();
+  }
+
+  async getById(id: string): Promise<ListingResponseDto | null> {
+    const listing = await this.prisma.listing.findUnique({
+      where: { id },
+      include: {
+        agency: {
+          select: {
+            id: true,
+            name: true,
+            cpc: true,
+          },
+        },
+      },
+    });
+
+    if (!listing) {
+      return null;
+    }
+
+    const rawListing = {
+      id: listing.id,
+      agencyId: listing.agencyId,
+      brand: listing.brand,
+      model: listing.model,
+      variant: listing.variant ?? undefined,
+      year: listing.year,
+      mileage: listing.mileage,
+      price: listing.price,
+      currency: listing.currency,
+      color: listing.color ?? undefined,
+      fuelType: listing.fuelType ?? undefined,
+      transmission: listing.transmission ?? undefined,
+      bodyType: listing.bodyType ?? undefined,
+      city: listing.city ?? undefined,
+      state: listing.state ?? undefined,
+      country: listing.country ?? undefined,
+      isAvailable: listing.isAvailable,
+      externalUrl: listing.externalUrl ?? undefined,
+      ownership: listing.ownership ?? undefined,
+    };
+
+    const normalized = this.normalizationService.normalize(rawListing);
+    normalized.agency.name = listing.agency.name;
+    normalized.agency.cpc = listing.agency.cpc || 0;
+    normalized.trackingUrl = `${process.env.API_BASE_URL || 'http://localhost:3377'}/click/${normalized.id}`;
+    normalized.clickCount = await this.clicksService.getListingClickCount(id);
+    
+    return normalized;
+  }
+
+  private async getClickCountsForListings(listingIds: string[]): Promise<Record<string, number>> {
+    if (listingIds.length === 0) {
+      return {};
+    }
+
+    const clickCounts = await this.prisma.click.groupBy({
+      by: ['listingId'],
+      where: {
+        listingId: {
+          in: listingIds,
+        },
+      },
+      _count: {
+        id: true,
+      },
+    });
+
+    const countsMap: Record<string, number> = {};
+    clickCounts.forEach((item) => {
+      countsMap[item.listingId] = item._count.id;
+    });
+    listingIds.forEach((id) => {
+      if (!countsMap[id]) {
+        countsMap[id] = 0;
+      }
+    });
+
+    return countsMap;
+  }
+}

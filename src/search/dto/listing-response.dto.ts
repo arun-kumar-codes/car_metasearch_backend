@@ -6,7 +6,7 @@ export class ListingResponseDto {
   year: number;
   mileage: number;
   price: number;
-  currency: string;
+  currency?: string;
   color?: string;
   fuelType?: string;
   transmission?: string;
@@ -14,15 +14,15 @@ export class ListingResponseDto {
   city?: string;
   state?: string;
   country?: string;
-  isAvailable: boolean;
+  isAvailable?: boolean;
   externalUrl?: string;
-  agency: {
-    id: string;
-    name: string;
-  };
+  ownership?: string;
+  agency: { id: string; name: string; cpc?: number };
+  trackingUrl?: string;
+  clickCount?: number;
 }
 
-export class SearchResponseDto {
+export interface SearchResponseDto {
   listings: ListingResponseDto[];
   total: number;
   page: number;

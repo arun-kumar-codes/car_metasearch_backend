@@ -1,24 +1,33 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Param, ParseUUIDPipe } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
-import { SearchResponseDto } from './dto/listing-response.dto';
+import { AutocompleteQueryDto } from './dto/autocomplete-query.dto';
 
 @Controller('search')
 export class SearchController {
-  constructor(private readonly searchService: SearchService) {}
+  constructor(private searchService: SearchService) {}
 
   @Get()
-  async search(@Query() query: SearchQueryDto): Promise<SearchResponseDto> {
+  async search(@Query() query: SearchQueryDto) {
     return this.searchService.search(query);
   }
 
-  @Get('brands')
-  async getBrands(): Promise<string[]> {
-    return this.searchService.getBrands();
+  @Get('listings/:id')
+  async getById(@Param('id', ParseUUIDPipe) id: string) {
+    const listing = await this.searchService.getById(id);
+    if (!listing) return { listing: null };
+    return { listing };
   }
 
-  @Get('models')
-  async getModels(@Query('brand') brand?: string): Promise<string[]> {
-    return this.searchService.getModels(brand);
+  @Get('brands/autocomplete')
+  async autocompleteBrands(@Query() dto: AutocompleteQueryDto) {
+    const brands = await this.searchService.autocompleteBrands(dto.city, dto.q);
+    return { brands };
+  }
+
+  @Get('models/autocomplete')
+  async autocompleteModels(@Query() dto: AutocompleteQueryDto) {
+    const models = await this.searchService.autocompleteModels(dto.city, dto.q, dto.brand);
+    return { models };
   }
 }

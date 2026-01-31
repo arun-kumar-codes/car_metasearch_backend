@@ -12,7 +12,7 @@ export interface RawAgencyListing {
   mileage?: number;
   odometer?: number;
   price: number;
-  currency: string;
+  currency?: string;
   color?: string;
   fuelType?: string;
   transmission?: string;
@@ -20,9 +20,9 @@ export interface RawAgencyListing {
   city?: string;
   state?: string;
   country?: string;
-  isAvailable: boolean;
+  isAvailable?: boolean;
   externalUrl?: string;
-  [key: string]: any;
+  ownership?: string;
 }
 
 export interface AgencySearchResult {
@@ -31,9 +31,5 @@ export interface AgencySearchResult {
   listings: RawAgencyListing[];
   success: boolean;
   error?: string;
-  responseTime?: number;
-}
-
-export interface IAgencyAdapter {
-  search(query: SearchQueryDto): Promise<AgencySearchResult>;
+  responseTime: number;
 }
