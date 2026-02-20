@@ -17,89 +17,49 @@ export class DatabaseAgencyAdapter {
       };
 
       if (query.brand) {
-        where.brand = {
-          contains: query.brand,
-          mode: 'insensitive',
-        };
+        where.brand = { contains: query.brand, mode: 'insensitive' };
       }
-
       if (query.model) {
-        where.model = {
-          contains: query.model,
-          mode: 'insensitive',
-        };
+        where.model = { contains: query.model, mode: 'insensitive' };
       }
-
       if (query.variant) {
-        where.variant = {
-          contains: query.variant,
-          mode: 'insensitive',
-        };
+        where.variant = { contains: query.variant, mode: 'insensitive' };
       }
-
       if (query.year || query.minYear) {
         if (query.year && !query.minYear) {
           where.year = query.year;
         } else if (query.minYear) {
           where.year = {
-            ...(where.year && typeof where.year === 'object' ? where.year : {}),
             gte: query.minYear,
             ...(query.year ? { lte: query.year } : {}),
           };
         }
       }
-
       if (query.minPrice !== undefined || query.maxPrice !== undefined) {
         where.price = {};
-        if (query.minPrice !== undefined) {
-          where.price.gte = query.minPrice;
-        }
-        if (query.maxPrice !== undefined) {
-          where.price.lte = query.maxPrice;
-        }
+        if (query.minPrice !== undefined) where.price.gte = query.minPrice;
+        if (query.maxPrice !== undefined) where.price.lte = query.maxPrice;
       }
-
       if (query.maxMileage !== undefined || query.minMileage !== undefined) {
         where.mileage = {};
-        if (query.minMileage !== undefined) {
-          where.mileage.gte = query.minMileage;
-        }
-        if (query.maxMileage !== undefined) {
-          where.mileage.lte = query.maxMileage;
-        }
+        if (query.minMileage !== undefined) where.mileage.gte = query.minMileage;
+        if (query.maxMileage !== undefined) where.mileage.lte = query.maxMileage;
       }
-
       if (query.city) {
-        where.city = {
-          contains: query.city,
-          mode: 'insensitive',
-        };
+        where.city = { contains: query.city, mode: 'insensitive' };
       }
-
       if (query.state) {
-        where.state = {
-          contains: query.state,
-          mode: 'insensitive',
-        };
+        where.state = { contains: query.state, mode: 'insensitive' };
       }
-
       if (query.fuelType) {
-        where.fuelType = {
-          equals: query.fuelType,
-          mode: 'insensitive',
-        };
+        where.fuelType = { equals: query.fuelType, mode: 'insensitive' };
       }
-
       if (query.transmission) {
-        where.transmission = {
-          equals: query.transmission,
-          mode: 'insensitive',
-        };
+        where.transmission = { equals: query.transmission, mode: 'insensitive' };
       }
-
       if (query.bodyType) {
         where.bodyType = {
-          equals: query.bodyType,
+          contains: query.bodyType,
           mode: 'insensitive',
         };
       }
@@ -123,12 +83,7 @@ export class DatabaseAgencyAdapter {
       const listings = await this.prisma.listing.findMany({
         where,
         include: {
-          agency: {
-            select: {
-              id: true,
-              name: true,
-            },
-          },
+          agency: { select: { id: true, name: true } },
         },
       });
 
@@ -151,6 +106,7 @@ export class DatabaseAgencyAdapter {
         country: listing.country ?? undefined,
         isAvailable: listing.isAvailable,
         externalUrl: listing.externalUrl ?? undefined,
+        images: this.parseImages(listing.images),
       }));
 
       return {
@@ -170,5 +126,15 @@ export class DatabaseAgencyAdapter {
         responseTime: Date.now() - startTime,
       };
     }
+  }
+
+  private parseImages(images: any): string[] | undefined {
+    if (!images) return undefined;
+    if (Array.isArray(images)) {
+      return images
+        .map((img) => (typeof img === 'string' ? img : null))
+        .filter((img): img is string => img !== null);
+    }
+    return undefined;
   }
 }

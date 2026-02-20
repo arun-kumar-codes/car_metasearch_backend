@@ -1,0 +1,35 @@
+-- AlterTable
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "email" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "password" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "emailVerified" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "emailVerificationToken" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "emailVerificationExpires" TIMESTAMP(3);
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "resetPasswordToken" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "resetPasswordExpires" TIMESTAMP(3);
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "lastLoginAt" TIMESTAMP(3);
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "businessType" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "gstNumber" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "panNumber" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "contactPersonName" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "contactPhone" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "contactEmail" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "websiteUrl" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "addressLine1" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "addressLine2" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "pincode" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "country" TEXT;
+ALTER TABLE "Agency" ALTER COLUMN "country" SET DEFAULT 'India';
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "onboardingStatus" TEXT NOT NULL DEFAULT 'PENDING';
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "approvalStatus" TEXT NOT NULL DEFAULT 'PENDING';
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "approvedBy" TEXT;
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "approvedAt" TIMESTAMP(3);
+ALTER TABLE "Agency" ADD COLUMN IF NOT EXISTS "rejectionReason" TEXT;
+
+ALTER TABLE "Agency" ALTER COLUMN "isActive" SET DEFAULT false;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Agency_email_key" ON "Agency"("email");
+CREATE INDEX IF NOT EXISTS "Agency_email_idx" ON "Agency"("email");
+CREATE UNIQUE INDEX IF NOT EXISTS "Agency_gstNumber_key" ON "Agency"("gstNumber");
+CREATE INDEX IF NOT EXISTS "Agency_gstNumber_idx" ON "Agency"("gstNumber");
+CREATE INDEX IF NOT EXISTS "Agency_onboardingStatus_idx" ON "Agency"("onboardingStatus");
+CREATE INDEX IF NOT EXISTS "Agency_approvalStatus_idx" ON "Agency"("approvalStatus");

@@ -1,0 +1,86 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url= env("DATABASE_URL")
+}
+
+model Agency {
+  id          String   @id @default(uuid())
+  name        String
+  apiUrl      String?
+  apiKey      String?
+  integrationType String @default("API") // API, FEED, REDIRECT, APIFY
+  apifyActorId String?
+  cpc         Float    @default(0.0)
+  isActive    Boolean  @default(true)
+  lastSyncedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  listings    Listing[]
+  clicks      Click[]
+}
+
+model Listing {
+  id            String   @id @default(uuid())
+  agencyId      String
+  agency        Agency   @relation(fields: [agencyId], references: [id])
+  
+  // Car Details
+  brand         String
+  model         String
+  variant       String?
+  year          Int
+  mileage       Int      // in kilometers
+  price         Float
+  currency      String   @default("INR")
+  
+  // Additional Details
+  color         String?
+  fuelType      String?  // Petrol, Diesel, Electric, Hybrid
+  transmission  String?  // Manual, Automatic
+  bodyType      String?  // Sedan, SUV, Hatchback, etc.
+  
+  // Location
+  city          String?
+  state         String?
+  country       String?
+  
+  // Availability
+  isAvailable   Boolean  @default(true)
+  externalUrl   String?  // URL to agency's listing
+  ownership     String?  // First Owner, Second Owner, etc.
+  
+  // Metadata
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  clicks        Click[]
+  
+  @@index([brand, model, year])
+  @@index([agencyId])
+  @@index([isAvailable])
+}
+
+model Click {
+  id          String   @id @default(uuid())
+  listingId   String
+  agencyId    String
+  listing     Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  agency      Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  
+  ipAddress   String?
+  userAgent   String?
+  referer     String?
+  converted   Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([listingId])
+  @@index([agencyId])
+  @@index([createdAt])
+}

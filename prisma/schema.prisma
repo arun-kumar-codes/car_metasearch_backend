@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,52 +7,210 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Platform staff (SUPERADMIN, ADMIN) – separate from dealers; auth via email + password
+model Admin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         String   // SUPERADMIN | ADMIN
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+  @@index([role])
+}
+
 model Agency {
-  id          String   @id @default(uuid())
-  name        String
-  apiUrl      String?
-  apiKey      String?
-  integrationType String @default("API") // API, FEED, REDIRECT
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id     String @id @default(uuid())
+
+  phone                    String?  @unique
+  password                 String?
+  phoneVerified            Boolean   @default(false)
+  phoneOtpToken            String?
+  phoneOtpExpires          DateTime?
+  loginOtpToken            String?
+  loginOtpExpires          DateTime?
+  
+  email                    String?
+  emailVerified            Boolean   @default(false)
+  emailVerificationToken   String?
+  emailVerificationExpires DateTime?
+  resetPasswordToken       String?
+  resetPasswordExpires     DateTime?
+  lastLoginAt              DateTime?
+
+  name                  String
+  businessType          String?
+  gstNumber             String? @unique
+  panNumber             String?
+  registrationNumber    String?
+  yearOfEstablishment   Int?
+  role                  String  @default("DEALER_ADMIN") // DEALER_ADMIN | DEALER_USER
+
+  contactPersonName String?
+  contactPhone      String?
+  contactEmail      String?
+  whatsappNumber    String?
+  websiteUrl        String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  pincode      String?
+  country      String? @default("India")
+  serviceAreas Json?   // Array of cities/regions they serve
+
+  bankName          String?
+  accountNumber     String?
+  ifscCode          String?
+  accountHolderName String?
+
+  apiUrl          String?
+  apiKey          String?
+  integrationType String  @default("API")
+  apifyActorId    String?
+
+  cpc             Float    @default(0.0)
+  cpl             Float    @default(0.0)
+  isActive        Boolean  @default(false)
+  onboardingStatus String  @default("PENDING")
+  approvalStatus  String   @default("PENDING")
+  approvedBy      String?
+  approvedAt      DateTime?
+  rejectionReason String?
+
+  lastSyncedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   listings    Listing[]
+  clicks      Click[]
+  users       AgencyUser[]
+
+  @@index([phone])
+  @@index([email])
+  @@index([gstNumber])
+  @@index([onboardingStatus])
+  @@index([approvalStatus])
+  @@index([role])
+}
+
+// Organisation users: login with email+password, see only their agency's data
+model AgencyUser {
+  id           String   @id @default(uuid())
+  agencyId     String
+  agency       Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  email        String   @unique
+  passwordHash String
+  role         String   @default("DEALER_USER") // DEALER_ADMIN | DEALER_USER
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([email])
 }
 
 model Listing {
-  id            String   @id @default(uuid())
-  agencyId      String
-  agency        Agency   @relation(fields: [agencyId], references: [id])
-  
-  // Car Details
-  brand         String
-  model         String
-  variant       String?
-  year          Int
-  mileage       Int      // in kilometers
-  price         Float
-  currency      String   @default("INR")
-  
-  // Additional Details
-  color         String?
-  fuelType      String?  // Petrol, Diesel, Electric, Hybrid
-  transmission  String?  // Manual, Automatic
-  bodyType      String?  // Sedan, SUV, Hatchback, etc.
-  
-  // Location
-  city          String?
-  state         String?
-  country       String?
-  
-  // Availability
-  isAvailable   Boolean  @default(true)
-  externalUrl   String?  // URL to agency's listing
-  
-  // Metadata
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
+  id       String  @id @default(uuid())
+  agencyId String
+  agency   Agency  @relation(fields: [agencyId], references: [id])
+
+  brand    String
+  model    String
+  variant  String?
+  year     Int
+  mileage  Int
+  price    Float
+  currency String  @default("INR")
+
+  color        String?
+  fuelType     String?
+  transmission String?
+  bodyType     String?
+
+  city    String?
+  state   String?
+  country String?
+
+  isAvailable Boolean @default(true)
+  externalUrl String?
+  ownership   String?
+
+  images      Json?   // Array of image URLs (string[])
+  imageSource String? // 'S3' for manual uploads, 'EXTERNAL' for scraped data, null for API listings
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clicks    Click[]
+
   @@index([brand, model, year])
   @@index([agencyId])
   @@index([isAvailable])
+  @@index([city])
+}
+
+model Click {
+  id        String  @id @default(uuid())
+  listingId String?
+  agencyId  String
+  listing   Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  agency    Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  ipAddress String?
+  userAgent String?
+  referer   String?
+  converted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([listingId])
+  @@index([agencyId])
+  @@index([createdAt])
+}
+
+// Consumer user (car buyer) - mobile + OTP login
+model User {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  name      String?
+  email     String?
+  suggestionsOptIn Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history  UserListingView[]
+  wishlist UserWishlist[]
+
+  @@index([phone])
+}
+
+// Viewed cars history (by listing id)
+model UserListingView {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId String
+
+  viewedAt  DateTime @default(now())
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
+}
+
+// Wishlist (saved cars)
+model UserWishlist {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId String
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
 }

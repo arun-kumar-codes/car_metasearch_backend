@@ -1,3 +1,5 @@
+prisma/update_checksum.sql
+
 # compiled output
 /dist
 /node_modules
