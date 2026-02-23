@@ -22,7 +22,8 @@ export class AgencyOrchestratorService {
     });
 
     const searchPromises = activeAgencies.map(async (agency) => {
-      if (agency.integrationType === 'APIFY') {
+      // APIFY, API, and DIRECT all serve from DB only (sync keeps data up to date)
+      if (agency.integrationType === 'APIFY' || agency.integrationType === 'API' || agency.integrationType === 'DIRECT') {
         return this.databaseAdapter.search(query, agency.id).catch((error) => ({
           agencyId: agency.id,
           agencyName: agency.name,
@@ -31,49 +32,17 @@ export class AgencyOrchestratorService {
           error: error instanceof Error ? error.message : 'Unknown error',
           responseTime: 0,
         } as AgencySearchResult));
-      } else if (agency.integrationType === 'DIRECT') {
-        // DIRECT agencies: Search DB only (manual listings)
-        return this.databaseAdapter.search(query, agency.id).catch((error) => ({
-          agencyId: agency.id,
-          agencyName: agency.name,
-          listings: [],
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-          responseTime: 0,
-        } as AgencySearchResult));
-      } else {
-
-        const [apiResult, dbResult] = await Promise.allSettled([
-          this.clientApiAdapter.search(query, agency.id),
-          this.databaseAdapter.search(query, agency.id),
-        ]);
-
-        const apiListings = apiResult.status === 'fulfilled' && apiResult.value.success
-          ? apiResult.value.listings
-          : [];
-
-        const dbListings = dbResult.status === 'fulfilled' && dbResult.value.success
-          ? dbResult.value.listings
-          : [];
-
-        const allListingsMap = new Map<string, RawAgencyListing>();
-        [...apiListings, ...dbListings].forEach((listing) => {
-          allListingsMap.set(listing.id, listing);
-        });
-
-        const mergedListings = Array.from(allListingsMap.values());
-
-        return {
-          agencyId: agency.id,
-          agencyName: agency.name,
-          listings: mergedListings,
-          success: true,
-          responseTime: Math.max(
-            apiResult.status === 'fulfilled' ? apiResult.value.responseTime : 0,
-            dbResult.status === 'fulfilled' ? dbResult.value.responseTime : 0,
-          ),
-        } as AgencySearchResult;
       }
+
+      // Fallback for any other type: DB only
+      return this.databaseAdapter.search(query, agency.id).catch((error) => ({
+        agencyId: agency.id,
+        agencyName: agency.name,
+        listings: [],
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        responseTime: 0,
+      } as AgencySearchResult));
     });
 
     const results = await Promise.all(searchPromises);

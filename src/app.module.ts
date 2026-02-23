@@ -8,6 +8,7 @@ import { SearchModule } from './search/search.module';
 import { ClicksModule } from './clicks/clicks.module';
 import { WebhookModule } from './webhooks/webhook.module';
 import { ApifyModule } from './apify/apify.module';
+import { SyncModule } from './sync/sync.module';
 import { AuthModule } from './auth/auth.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { AgencyModule } from './agency/agency.module';
@@ -23,6 +24,7 @@ import { UsersModule } from './users/users.module';
     ClicksModule,
     WebhookModule,
     ApifyModule,
+    SyncModule,
     AuthModule,
     OnboardingModule,
     AgencyModule,

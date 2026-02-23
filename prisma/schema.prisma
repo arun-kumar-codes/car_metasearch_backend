@@ -87,6 +87,7 @@ model Agency {
   listings    Listing[]
   clicks      Click[]
   users       AgencyUser[]
+  apiSources  AgencyApiSource[]
 
   @@index([phone])
   @@index([email])
@@ -94,6 +95,24 @@ model Agency {
   @@index([onboardingStatus])
   @@index([approvalStatus])
   @@index([role])
+}
+
+// Multiple API feeds per agency (e.g. multiple affiliate feeds)
+model AgencyApiSource {
+  id       String  @id @default(uuid())
+  agencyId String
+  agency   Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  name    String?  // Optional label, e.g. "Cars24 feed", "Partner API"
+  apiUrl  String
+  apiKey  String?
+  order   Int      @default(0)
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
 }
 
 // Organisation users: login with email+password, see only their agency's data
@@ -140,6 +159,8 @@ model Listing {
 
   images      Json?   // Array of image URLs (string[])
   imageSource String? // 'S3' for manual uploads, 'EXTERNAL' for scraped data, null for API listings
+  listingSource String? // 'MANUAL' | 'API' | 'APIFY' – which pipeline created this listing
+  externalId  String? // Affiliate/API listing id for sync dedupe (API-sourced only)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -149,6 +170,7 @@ model Listing {
   @@index([agencyId])
   @@index([isAvailable])
   @@index([city])
+  @@index([agencyId, listingSource])
 }
 
 model Click {

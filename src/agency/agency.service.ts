@@ -49,6 +49,10 @@ export class AgencyService {
         role: true,
         createdAt: true,
         _count: { select: { listings: true } },
+        apiSources: {
+          orderBy: { order: 'asc' },
+          select: { id: true, name: true, apiUrl: true, apiKey: true, order: true, isActive: true },
+        },
       },
     });
     if (!agency) throw new UnauthorizedException('Agency not found');
@@ -87,13 +91,30 @@ export class AgencyService {
     if (dto.ifscCode !== undefined) data.ifscCode = dto.ifscCode;
     if (dto.accountHolderName !== undefined) data.accountHolderName = dto.accountHolderName;
     
-    // API Configuration
-    if (dto.apiUrl !== undefined) {
-      data.apiUrl = dto.apiUrl;
+    // API Configuration (legacy single URL)
+    if (dto.apiUrl !== undefined) data.apiUrl = dto.apiUrl;
+    if (dto.apiKey !== undefined) data.apiKey = dto.apiKey;
+
+    // Multiple API sources: replace all for this agency
+    if (dto.apiSources !== undefined) {
+      await this.prisma.agencyApiSource.deleteMany({ where: { agencyId } });
+      if (dto.apiSources.length > 0) {
+        await this.prisma.agencyApiSource.createMany({
+          data: dto.apiSources.map((s, i) => ({
+            agencyId,
+            name: s.name ?? null,
+            apiUrl: s.apiUrl,
+            apiKey: s.apiKey ?? null,
+            order: s.order ?? i,
+            isActive: s.isActive !== false,
+          })),
+        });
+      }
+      data.integrationType = dto.apiSources.length > 0 ? 'API' : 'DIRECT';
+    } else if (dto.apiUrl !== undefined) {
       data.integrationType = dto.apiUrl ? 'API' : 'DIRECT';
     }
-    if (dto.apiKey !== undefined) data.apiKey = dto.apiKey;
-    
+
     await this.prisma.agency.update({
       where: { id: agencyId },
       data,
@@ -112,6 +133,7 @@ export class AgencyService {
     return this.prisma.listing.create({
       data: {
         agencyId,
+        listingSource: 'MANUAL',
         brand: dto.brand,
         model: dto.model,
         variant: dto.variant ?? null,

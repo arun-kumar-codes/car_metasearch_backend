@@ -61,6 +61,7 @@ export class ApifySyncService {
           await this.prisma.listing.create({
             data: {
               agencyId: raw.agencyId,
+              listingSource: 'APIFY',
               brand: raw.brand || raw.make || 'Unknown',
               model: raw.model || 'Unknown',
               variant: raw.variant ?? null,

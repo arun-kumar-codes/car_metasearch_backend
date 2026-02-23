@@ -7,6 +7,7 @@ import { AgencyOrchestratorService } from './services/agency-orchestrator.servic
 import { NormalizationService } from './services/normalization.service';
 import { ApifyService } from './services/apify.service';
 import { ApifySyncService } from './services/apify-sync.service';
+import { ApiSyncService } from './services/api-sync.service';
 import { FieldMapperService } from './services/field-mapper.service';
 
 @Module({
@@ -18,12 +19,14 @@ import { FieldMapperService } from './services/field-mapper.service';
     NormalizationService,
     ApifyService,
     ApifySyncService,
+    ApiSyncService,
     FieldMapperService,
   ],
   exports: [
     AgencyOrchestratorService,
     NormalizationService,
     ApifySyncService,
+    ApiSyncService,
   ],
 })
 export class AgenciesModule {}

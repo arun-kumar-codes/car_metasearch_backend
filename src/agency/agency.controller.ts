@@ -7,6 +7,7 @@ import { ApprovalGuard } from '../auth/guards/approval.guard';
 import { Role } from '../auth/constants/roles';
 import { AgencyService } from './agency.service';
 import { StorageService } from '../storage/storage.service';
+import { ApiSyncService } from '../agencies/services/api-sync.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { CreateListingDto } from './dto/create-listing.dto';
 import { UpdateListingDto } from './dto/update-listing.dto';
@@ -26,6 +27,7 @@ export class AgencyController {
   constructor(
     private agencyService: AgencyService,
     private storageService: StorageService,
+    private apiSyncService: ApiSyncService,
   ) {}
 
   @Get('profile')
@@ -37,6 +39,15 @@ export class AgencyController {
   @UseGuards(ApprovalGuard)
   async updateProfile(@Request() req: { user: AgencyReqUser }, @Body() dto: UpdateProfileDto) {
     return this.agencyService.updateProfile(getAgencyId(req.user), dto);
+  }
+
+  /** Sync this agency's API listings now (from configured API URL/sources). Does not affect manual listings. */
+  @Post('sync')
+  @UseGuards(ApprovalGuard)
+  async syncListings(@Request() req: { user: AgencyReqUser }) {
+    const agencyId = getAgencyId(req.user);
+    const count = await this.apiSyncService.syncAgency(agencyId);
+    return { message: 'Sync completed.', count };
   }
 
   @Get('listings')

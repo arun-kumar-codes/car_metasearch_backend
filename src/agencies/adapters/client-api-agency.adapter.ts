@@ -13,6 +13,69 @@ export class ClientApiAgencyAdapter {
     private fieldMapper: FieldMapperService,
   ) {}
 
+  /**
+   * Fetch full feed from agency: all configured API sources (and legacy single apiUrl) merged.
+   * Used by API sync to extract and store listings.
+   */
+  async fetchFullFeed(agencyId: string): Promise<RawAgencyListing[]> {
+    const agency = await this.prisma.agency.findUnique({
+      where: { id: agencyId },
+      select: {
+        id: true,
+        apiUrl: true,
+        apiKey: true,
+        apiSources: {
+          where: { isActive: true },
+          orderBy: { order: 'asc' },
+          select: { apiUrl: true, apiKey: true },
+        },
+      },
+    });
+    if (!agency) return [];
+
+    const sources: { apiUrl: string; apiKey: string | null }[] = [];
+    if (agency.apiSources?.length) {
+      agency.apiSources.forEach((s) => sources.push({ apiUrl: s.apiUrl, apiKey: s.apiKey ?? null }));
+    } else if (agency.apiUrl) {
+      sources.push({ apiUrl: agency.apiUrl, apiKey: agency.apiKey ?? null });
+    }
+    if (sources.length === 0) return [];
+
+    const allListings: RawAgencyListing[] = [];
+    for (const source of sources) {
+      try {
+        const listings = await this.fetchFullFeedFromUrl(
+          source.apiUrl,
+          source.apiKey,
+          agencyId,
+        );
+        allListings.push(...listings);
+      } catch {
+        // Skip failed source, continue with others
+      }
+    }
+    return allListings;
+  }
+
+  /**
+   * Fetch full feed from a single URL (used for multiple API sources per agency).
+   */
+  async fetchFullFeedFromUrl(
+    apiUrl: string,
+    apiKey: string | null,
+    agencyId: string,
+  ): Promise<RawAgencyListing[]> {
+    const response = await this.httpService.axiosRef.get(apiUrl, {
+      params: {},
+      headers: {
+        ...(apiKey && { Authorization: `Bearer ${apiKey}` }),
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    });
+    return this.transformApiResponse(response.data, agencyId);
+  }
+
   async search(query: SearchQueryDto, agencyId: string): Promise<AgencySearchResult> {
     const startTime = Date.now();
 
@@ -94,26 +157,63 @@ export class ClientApiAgencyAdapter {
   }
 
   private transformApiResponse(apiData: any, agencyId: string): RawAgencyListing[] {
-    const items = apiData.data || apiData.listings || apiData.results || apiData.items || [];
+    const items = Array.isArray(apiData)
+      ? apiData
+      : apiData?.data || apiData?.listings || apiData?.results || apiData?.items || [];
     return items.map((item: any) => {
-      const id = this.fieldMapper.extractString(item, 'id', 'listingId') || `api-${Date.now()}-${Math.random()}`;
-      const model = this.fieldMapper.extractString(item, 'model', 'carModel') || 'Unknown';
-      const externalUrl = this.fieldMapper.extractString(item, 'externalUrl', 'url', 'listingUrl');
-      const brand = this.fieldMapper.extractBrand(item, model, externalUrl, 'brand', 'make', 'manufacturer');
+      const id =
+        this.fieldMapper.extractString(item, 'id', 'listingId', 'appointment_id', 'listing_id') ||
+        `api-${Date.now()}-${Math.random()}`;
+      const model = this.fieldMapper.extractString(item, 'model', 'carModel', 'car_name') || 'Unknown';
+      const externalUrl = this.fieldMapper.extractString(
+        item,
+        'externalUrl',
+        'url',
+        'listingUrl',
+        'cdp_relative_url',
+      );
+      const brand = this.fieldMapper.extractBrand(
+        item,
+        model,
+        externalUrl,
+        'brand',
+        'make',
+        'manufacturer',
+      );
       const variant = this.fieldMapper.extractString(item, 'variant', 'trim');
       const year = this.fieldMapper.extractInt(item, 'year', 'modelYear', 'myear') || new Date().getFullYear();
-      const mileage = this.fieldMapper.extractInt(item, 'mileage', 'odometer', 'km');
-      const price = this.fieldMapper.extractFloat(item, 'price', 'listingPrice', 'priceAmount');
+      const mileage = this.fieldMapper.extractInt(item, 'mileage', 'odometer', 'odometer.value', 'km');
+      const price = this.fieldMapper.extractFloat(
+        item,
+        'price',
+        'listingPrice',
+        'listing_price',
+        'priceAmount',
+      );
       const currency = this.fieldMapper.extractString(item, 'currency') || 'INR';
       const color = this.fieldMapper.extractString(item, 'color', 'colour');
-      const fuelType = this.fieldMapper.extractString(item, 'fuelType', 'fuel');
-      const transmission = this.fieldMapper.extractString(item, 'transmission', 'gearType');
-      const bodyType = this.fieldMapper.extractString(item, 'bodyType', 'carType');
-      const city = this.fieldMapper.extractString(item, 'city', 'locationCity');
-      const state = this.fieldMapper.extractString(item, 'state', 'locationState');
-      const country = this.fieldMapper.extractString(item, 'country') || 'India';
-      const isAvailable = this.fieldMapper.extractBoolean(item, 'isAvailable', 'available') && this.fieldMapper.extractString(item, 'status') !== 'sold';
-      // const externalUrl = this.fieldMapper.extractString(item, 'externalUrl', 'url', 'listingUrl');
+      const fuelType = this.fieldMapper.extractString(item, 'fuelType', 'fuel', 'fuel_type');
+      const transmission = this.fieldMapper.extractString(
+        item,
+        'transmission',
+        'gearType',
+        'transmission_type.value',
+        'transmission_type.display',
+      );
+      const bodyType = this.fieldMapper.extractString(item, 'bodyType', 'carType', 'body_type');
+      const city = this.fieldMapper.extractString(
+        item,
+        'city',
+        'locationCity',
+        'address.locality',
+        'address.city',
+      );
+      const state = this.fieldMapper.extractString(item, 'state', 'locationState', 'address.state');
+      const country = this.fieldMapper.extractString(item, 'country', 'address.country') || 'India';
+      const isAvailable =
+        this.fieldMapper.extractBoolean(item, 'isAvailable', 'available') &&
+        this.fieldMapper.extractString(item, 'status') !== 'sold' &&
+        this.fieldMapper.extractString(item, 'listing') !== 'sold';
       const ownership = this.fieldMapper.extractOwnership(item, 'ownership', 'owner');
 
       // Extract images from API response
@@ -179,11 +279,38 @@ export class ClientApiAgencyAdapter {
       }
     }
 
-    // Try single image field
-    const singleImageFields = ['image', 'imageUrl', 'image_url', 'photo', 'photoUrl', 'photo_url', 'thumbnail', 'thumbnailUrl'];
+    // Try single image field (string URL)
+    const singleImageFields = [
+      'image',
+      'imageUrl',
+      'image_url',
+      'photo',
+      'photoUrl',
+      'photo_url',
+      'thumbnail',
+      'thumbnailUrl',
+    ];
     for (const field of singleImageFields) {
       if (item[field] && typeof item[field] === 'string') {
         return [item[field]];
+      }
+    }
+
+    // Try single image object with .uri or .url (e.g. listing_image: { uri: "..." })
+    const singleImageObjectFields = [
+      'listing_image',
+      'listingImage',
+      'detail_image',
+      'detailImage',
+      'image',
+      'photo',
+      'thumbnail',
+    ];
+    for (const field of singleImageObjectFields) {
+      const obj = item[field];
+      if (obj && typeof obj === 'object') {
+        const url = obj.uri || obj.url || obj.src;
+        if (url && typeof url === 'string') return [url];
       }
     }
 

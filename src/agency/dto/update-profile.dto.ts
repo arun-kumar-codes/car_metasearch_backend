@@ -1,4 +1,42 @@
-import { IsString, IsOptional, IsEmail, IsUrl, IsInt, IsArray, Min } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEmail,
+  IsUrl,
+  IsInt,
+  IsArray,
+  Min,
+  ValidateNested,
+  IsBoolean,
+  IsUUID,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class ApiSourceItemDto {
+  @IsUUID()
+  @IsOptional()
+  id?: string;
+
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @IsUrl()
+  apiUrl: string;
+
+  @IsString()
+  @IsOptional()
+  apiKey?: string;
+
+  @IsInt()
+  @IsOptional()
+  @Min(0)
+  order?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
+}
 
 export class UpdateProfileDto {
   @IsString()
@@ -90,4 +128,10 @@ export class UpdateProfileDto {
   @IsString()
   @IsOptional()
   apiKey?: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ApiSourceItemDto)
+  @IsOptional()
+  apiSources?: ApiSourceItemDto[];
 }
