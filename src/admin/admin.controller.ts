@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClicksService } from '../clicks/clicks.service';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Role } from '../auth/constants/roles';
 import { CreateAdminDto } from './dto/create-admin.dto';
@@ -12,7 +13,10 @@ import * as bcrypt from 'bcrypt';
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AdminController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private clicksService: ClicksService,
+  ) {}
 
   @Get('analytics')
   @Roles(Role.SUPERADMIN, Role.ADMIN)
@@ -131,7 +135,6 @@ export class AdminController {
         businessType: true,
         role: true,
         isActive: true,
-        cpc: true,
         cpl: true,
         approvalStatus: true,
         onboardingStatus: true,
@@ -152,12 +155,10 @@ export class AdminController {
     });
     if (!agency) throw new NotFoundException('Agency not found');
     const { password: _, ...rest } = agency;
-    const clicksWhereConverted = await this.prisma.click.count({
-      where: { agencyId, converted: true },
-    });
+    const leadsCount = await this.clicksService.getCplCount15DaySession(agencyId);
     return {
       ...rest,
-      leadsCount: clicksWhereConverted,
+      leadsCount,
     };
   }
 
@@ -211,7 +212,6 @@ export class AdminController {
         name: true,
         phone: true,
         email: true,
-        cpc: true,
         cpl: true,
         isActive: true,
         approvalStatus: true,
@@ -254,20 +254,18 @@ export class AdminController {
       where: { agencyId: { in: agencyIds }, isAvailable: true },
       _count: { id: true },
     });
-    const leadsByAgency = await this.prisma.click.groupBy({
-      by: ['agencyId'],
-      where: { agencyId: { in: agencyIds }, converted: true },
-      _count: { id: true },
-    });
+    const leadsMap = new Map<string, number>();
+    for (const a of agencies) {
+      const count = await this.clicksService.getCplCount15DaySession(a.id);
+      leadsMap.set(a.id, count);
+    }
 
     const availableMap = new Map(availableByAgency.map((x) => [x.agencyId, x._count.id]));
-    const leadsMap = new Map(leadsByAgency.map((x) => [x.agencyId, x._count.id]));
 
     return {
       agencies: agencies.map((a) => ({
         agencyId: a.id,
         agencyName: a.name,
-        cpc: a.cpc,
         cpl: a.cpl,
         isActive: a.isActive,
         approvalStatus: a.approvalStatus,
@@ -430,6 +428,42 @@ export class AdminController {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  @Post('bills/generate')
+  @Roles(Role.SUPERADMIN, Role.ADMIN)
+  async generateAgencyBills(@Body() body: { periodLabel?: string }) {
+    const periodLabel = body?.periodLabel?.trim();
+    if (!periodLabel || !/^\d{4}-\d{2}$/.test(periodLabel)) {
+      throw new BadRequestException('periodLabel required as YYYY-MM (e.g. 2025-03)');
+    }
+    const [y, m] = periodLabel.split('-').map(Number);
+    const startDate = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const endDate = new Date(y, m, 0, 23, 59, 59, 999);
+
+    const agencies = await this.prisma.agency.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, cpl: true },
+    });
+    const created: Array<{ agencyId: string; agencyName: string; amount: number }> = [];
+    for (const agency of agencies) {
+      const existing = await (this.prisma as any).agencyBill.findFirst({
+        where: { agencyId: agency.id, periodLabel },
+      });
+      if (existing) continue;
+      const cplCount = await this.clicksService.getCplCount15DaySession(agency.id, startDate, endDate);
+      const amount = Math.round(cplCount * agency.cpl * 100) / 100;
+      await (this.prisma as any).agencyBill.create({
+        data: {
+          agencyId: agency.id,
+          periodLabel,
+          amount,
+          status: 'PENDING',
+        },
+      });
+      created.push({ agencyId: agency.id, agencyName: agency.name, amount });
+    }
+    return { message: 'Agency bills generated for period', periodLabel, created };
   }
 
   @Get('admins')

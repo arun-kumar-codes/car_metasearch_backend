@@ -127,4 +127,33 @@ export class AgencyController {
   async deleteUser(@Request() req: { user: AgencyReqUser }, @Param('id') id: string) {
     return this.agencyService.deleteUser(getAgencyId(req.user), id, req.user.id);
   }
+
+  @Get('wallet')
+  async getWallet(@Request() req: { user: AgencyReqUser }) {
+    return this.agencyService.getWallet(getAgencyId(req.user));
+  }
+
+  @Post('wallet/top-up')
+  @UseGuards(ApprovalGuard)
+  async topUpWallet(
+    @Request() req: { user: AgencyReqUser },
+    @Body() body: { amount?: number },
+  ) {
+    const amount = Number(body?.amount);
+    return this.agencyService.topUpWallet(getAgencyId(req.user), amount);
+  }
+
+  @Get('bills')
+  async getBills(@Request() req: { user: AgencyReqUser }) {
+    return this.agencyService.getMyBills(getAgencyId(req.user));
+  }
+
+  @Post('bills/:id/pay')
+  @UseGuards(ApprovalGuard)
+  async payBill(
+    @Request() req: { user: AgencyReqUser },
+    @Param('id') id: string,
+  ) {
+    return this.agencyService.payBill(getAgencyId(req.user), id);
+  }
 }

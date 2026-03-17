@@ -14,6 +14,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
 import { AgencyModule } from './agency/agency.module';
 import { AdminModule } from './admin/admin.module';
 import { UsersModule } from './users/users.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { UsersModule } from './users/users.module';
     ScheduleModule.forRoot(),
     PrismaModule,
     SearchModule,
+    ChatModule,
     ClicksModule,
     WebhookModule,
     ApifyModule,

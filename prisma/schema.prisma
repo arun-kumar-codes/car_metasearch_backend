@@ -74,6 +74,7 @@ model Agency {
 
   cpc             Float    @default(0.0)
   cpl             Float    @default(0.0)
+  walletBalance   Float    @default(0) // Agency pays platform from this wallet
   isActive        Boolean  @default(false)
   onboardingStatus String  @default("PENDING")
   approvalStatus  String   @default("PENDING")
@@ -88,6 +89,7 @@ model Agency {
   clicks      Click[]
   users       AgencyUser[]
   apiSources  AgencyApiSource[]
+  agencyBills AgencyBill[]
 
   @@index([phone])
   @@index([email])
@@ -113,6 +115,22 @@ model AgencyApiSource {
   updatedAt DateTime @updatedAt
 
   @@index([agencyId])
+}
+
+// Bill generated for an agency (CPL charges for a period); agency pays from wallet
+model AgencyBill {
+  id          String    @id @default(uuid())
+  agencyId    String
+  agency      Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  periodLabel String    // e.g. "2025-03"
+  amount      Float
+  status      String    @default("PENDING") // PENDING | PAID
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([agencyId])
+  @@index([status])
+  @@index([periodLabel])
 }
 
 // Organisation users: login with email+password, see only their agency's data

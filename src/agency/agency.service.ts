@@ -250,4 +250,69 @@ export class AgencyService {
     await this.prisma.agencyUser.delete({ where: { id: userId } });
     return { message: 'User removed' };
   }
+
+  async getWallet(agencyId: string) {
+    const agency = await this.prisma.agency.findUnique({
+      where: { id: agencyId },
+      select: { id: true, walletBalance: true },
+    });
+    if (!agency) throw new UnauthorizedException('Agency not found');
+    return { balance: Number((agency as any).walletBalance ?? 0) };
+  }
+
+  async topUpWallet(agencyId: string, amount: number) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new ForbiddenException('amount must be a positive number');
+    }
+    const agency = await this.prisma.agency.update({
+      where: { id: agencyId },
+      data: { walletBalance: { increment: amount } } as any,
+    });
+    return { message: 'Wallet topped up', balance: Number((agency as any).walletBalance ?? 0) };
+  }
+
+  async getMyBills(agencyId: string) {
+    const bills = await (this.prisma as any).agencyBill.findMany({
+      where: { agencyId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return { bills };
+  }
+
+  async payBill(agencyId: string, billId: string) {
+    const bill = await (this.prisma as any).agencyBill.findUnique({
+      where: { id: billId },
+    });
+    if (!bill) throw new ForbiddenException('Bill not found');
+    if (bill.agencyId !== agencyId) throw new ForbiddenException('Access denied');
+    if (bill.status === 'PAID') throw new ForbiddenException('Bill already paid');
+
+    const agency = await this.prisma.agency.findUnique({
+      where: { id: agencyId },
+    });
+    if (!agency) throw new UnauthorizedException('Agency not found');
+    const walletBal = Number((agency as any).walletBalance ?? 0);
+    if (walletBal < bill.amount) {
+      throw new ForbiddenException(
+        `Insufficient wallet balance. Required: ₹${bill.amount}, available: ₹${walletBal}`,
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.agency.update({
+        where: { id: agencyId },
+        data: { walletBalance: { decrement: bill.amount } } as any,
+      }),
+      (this.prisma as any).agencyBill.update({
+        where: { id: billId },
+        data: { status: 'PAID', paidAt: new Date() },
+      }),
+    ]);
+
+    const updated = await (this.prisma as any).agencyBill.findUnique({
+      where: { id: billId },
+    });
+    return { message: 'Bill paid successfully', bill: updated };
+  }
 }

@@ -1,9 +1,52 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const CPL_SESSION_DAYS = 15;
+
 @Injectable()
 export class ClicksService {
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * CPL is counted when user navigates from our site to dealer site.
+   * Same user (by ipAddress) counts as 1 CPL per 15-day window; after 15 days, next navigation counts as 2.
+   */
+  async getCplCount15DaySession(agencyId: string, startDate?: Date, endDate?: Date): Promise<number> {
+    const where: { agencyId: string; createdAt?: any } = { agencyId };
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = startDate;
+      if (endDate) where.createdAt.lte = endDate;
+    }
+    const clicks = await this.prisma.click.findMany({
+      where,
+      select: { ipAddress: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const byFingerprint = new Map<string, Date[]>();
+    for (const c of clicks) {
+      const key = c.ipAddress?.trim() || 'unknown';
+      if (!byFingerprint.has(key)) byFingerprint.set(key, []);
+      byFingerprint.get(key)!.push(c.createdAt);
+    }
+    let sessions = 0;
+    for (const dates of byFingerprint.values()) {
+      let lastInWindow: Date | null = null;
+      for (const d of dates) {
+        if (lastInWindow === null) {
+          sessions += 1;
+          lastInWindow = d;
+          continue;
+        }
+        const daysSince = (d.getTime() - lastInWindow.getTime()) / (24 * 60 * 60 * 1000);
+        if (daysSince > CPL_SESSION_DAYS) {
+          sessions += 1;
+          lastInWindow = d;
+        }
+      }
+    }
+    return sessions;
+  }
 
   async trackClick(
     listingId: string | null,
@@ -36,26 +79,16 @@ export class ClicksService {
       if (endDate) where.createdAt.lte = endDate;
     }
     const totalClicks = await this.prisma.click.count({ where });
-    const whereLeads = { ...where, converted: true };
-    const totalLeads = await this.prisma.click.count({ where: whereLeads });
+    const totalLeads = await this.getCplCount15DaySession(agencyId, startDate, endDate);
     const agency = await this.prisma.agency.findUnique({
       where: { id: agencyId },
-      select: { cpc: true, cpl: true },
+      select: { cpl: true },
     });
-    const cpc = agency?.cpc ?? 0;
-    const totalCost = totalClicks * cpc;
-    const configuredCpl = agency?.cpl ?? 0;
-    const cpl = totalLeads > 0 ? totalCost / totalLeads : configuredCpl;
+    const cpl = agency?.cpl ?? 0;
+    const totalCost = totalLeads * cpl;
     const clicksByListing = await this.prisma.click.groupBy({
       by: ['listingId'],
       where,
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
-      take: 10,
-    });
-    const leadsByListing = await this.prisma.click.groupBy({
-      by: ['listingId'],
-      where: whereLeads,
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
       take: 10,
@@ -69,19 +102,12 @@ export class ClicksService {
       acc[date] = (acc[date] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const leads = await this.prisma.click.findMany({
-      where: whereLeads,
-      select: { createdAt: true },
-    });
-    const leadsByDate = leads.reduce((acc, click) => {
-      const date = click.createdAt.toISOString().split('T')[0];
-      acc[date] = (acc[date] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+    const leadsByListing = clicksByListing;
+    const leadsByDate = clicksByDate;
     return {
       totalClicks,
       totalCost,
-      cpc,
+      cpc: 0,
       totalLeads,
       cpl,
       clicksByListing,
@@ -115,9 +141,8 @@ export class ClicksService {
   async getDashboardSummary(agencyId: string) {
     const agency = await this.prisma.agency.findUnique({
       where: { id: agencyId },
-      select: { cpc: true, cpl: true, _count: { select: { listings: true } } },
+      select: { cpl: true, _count: { select: { listings: true } } },
     });
-    const cpc = agency?.cpc ?? 0;
     const configuredCpl = agency?.cpl ?? 0;
     const activeListings = agency?._count?.listings || 0;
 
@@ -155,23 +180,15 @@ export class ClicksService {
       where: { agencyId, createdAt: { gte: lastMonthStart, lt: monthStart } },
     });
 
-    const totalBill = allTimeClicks * cpc;
-    const monthBill = monthClicks * cpc;
-    const lastMonthBill = lastMonthClicks * cpc;
+    const allTimeLeads = await this.getCplCount15DaySession(agencyId);
+    const totalBill = allTimeLeads * configuredCpl;
+    const monthLeads = await this.getCplCount15DaySession(agencyId, monthStart, now);
+    const monthBill = monthLeads * configuredCpl;
+    const lastMonthLeads = await this.getCplCount15DaySession(agencyId, lastMonthStart, monthStart);
+    const lastMonthBill = lastMonthLeads * configuredCpl;
 
-    const allTimeLeads = await this.prisma.click.count({
-      where: { agencyId, converted: true },
-    });
-    const todayLeads = await this.prisma.click.count({
-      where: { agencyId, converted: true, createdAt: { gte: todayStart } },
-    });
-    const weekLeads = await this.prisma.click.count({
-      where: { agencyId, converted: true, createdAt: { gte: weekStart } },
-    });
-    const monthLeads = await this.prisma.click.count({
-      where: { agencyId, converted: true, createdAt: { gte: monthStart } },
-    });
-    const cpl = allTimeLeads > 0 ? totalBill / allTimeLeads : configuredCpl;
+    const todayLeads = await this.getCplCount15DaySession(agencyId, todayStart, now);
+    const weekLeads = await this.getCplCount15DaySession(agencyId, weekStart, now);
 
     const recentClicks = await this.prisma.click.findMany({
       where: { agencyId },
@@ -212,9 +229,9 @@ export class ClicksService {
       activeListings,
       totalClicks: allTimeClicks,
       totalBill,
-      cpc,
+      cpc: 0,
       totalLeads: allTimeLeads,
-      cpl,
+      cpl: configuredCpl,
       configuredCpl,
       todayLeads,
       weekLeads,
