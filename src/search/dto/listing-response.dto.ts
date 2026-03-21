@@ -16,6 +16,7 @@ export class ListingResponseDto {
   country?: string;
   isAvailable?: boolean;
   externalUrl?: string;
+  cdpBaseUrl?: string;
   ownership?: string;
   agency: { id: string; name: string; cpc?: number; whatsappNumber?: string };
   trackingUrl?: string;

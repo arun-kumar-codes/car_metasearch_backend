@@ -60,9 +60,19 @@ export class ClicksService {
       select: { id: true },
     });
     if (!agency) throw new Error(`Agency with ID ${agencyId} not found`);
+
+    let safeListingId: string | null = null;
+    if (listingId) {
+      const listing = await this.prisma.listing.findUnique({
+        where: { id: listingId },
+        select: { id: true },
+      });
+      safeListingId = listing?.id ?? null;
+    }
+
     return this.prisma.click.create({
       data: {
-        ...(listingId ? { listingId } : {}),
+        ...(safeListingId ? { listingId: safeListingId } : {}),
         agencyId,
         ipAddress,
         userAgent,

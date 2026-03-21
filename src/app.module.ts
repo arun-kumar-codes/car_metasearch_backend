@@ -15,12 +15,14 @@ import { AgencyModule } from './agency/agency.module';
 import { AdminModule } from './admin/admin.module';
 import { UsersModule } from './users/users.module';
 import { ChatModule } from './chat/chat.module';
+import { WatiModule } from './wati/wati.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     PrismaModule,
+    WatiModule,
     SearchModule,
     ChatModule,
     ClicksModule,

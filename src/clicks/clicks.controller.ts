@@ -61,6 +61,7 @@ export class ClicksController {
     @Param('listingId') listingId: string,
     @Query('url') externalUrl: string | undefined,
     @Query('agencyId') agencyIdParam: string | undefined,
+    @Query('cdpBaseUrl') cdpBaseUrlParam: string | undefined,
     @Res() res: Response,
     @Req() req: Request,
   ) {
@@ -74,7 +75,7 @@ export class ClicksController {
 
     if (externalUrl && agencyIdParam) {
       agencyId = agencyIdParam;
-      redirectUrl = externalUrl;
+      redirectUrl = await this.toAbsoluteDealerUrl(externalUrl, agencyId, cdpBaseUrlParam);
     } else {
       const listing = await this.prisma.listing.findUnique({
         where: { id: listingId },
@@ -82,12 +83,65 @@ export class ClicksController {
       });
       if (!listing) return res.status(404).send('Listing not found');
       agencyId = listing.agencyId;
-      redirectUrl = listing.externalUrl;
+      redirectUrl = await this.toAbsoluteDealerUrl(listing.externalUrl, agencyId, cdpBaseUrlParam);
     }
 
     await this.clicksService.trackClick(effectiveListingId, agencyId, ipAddress, userAgent, referer);
 
     if (redirectUrl) return res.redirect(302, redirectUrl);
     return res.status(404).send('Redirect URL not found');
+  }
+
+  /**
+   * Some feeds store external URLs as relative paths (e.g. /buy-used-car/...).
+   * Convert to full dealer-domain URL using agency API source/base URL.
+   */
+  private async toAbsoluteDealerUrl(
+    urlValue: string | null | undefined,
+    agencyId: string,
+    cdpBaseUrl?: string,
+  ): Promise<string | null> {
+    if (!urlValue) return null;
+    const url = String(urlValue).trim();
+    if (!url) return null;
+
+    // Already absolute
+    if (/^https?:\/\//i.test(url)) return url;
+
+    // Prefer cdp base url from API payload when provided.
+    if (cdpBaseUrl) {
+      try {
+        const base = new URL(cdpBaseUrl);
+        const cleanPath = url.startsWith('/') ? url : `/${url}`;
+        return `${base.protocol}//${base.host}${cleanPath}`;
+      } catch {
+        // ignore and fallback
+      }
+    }
+
+    // Build from agency API source / legacy apiUrl domain
+    const agency = await this.prisma.agency.findUnique({
+      where: { id: agencyId },
+      select: {
+        apiUrl: true,
+        apiSources: {
+          where: { isActive: true },
+          orderBy: { order: 'asc' },
+          select: { apiUrl: true },
+          take: 1,
+        },
+      },
+    });
+
+    const sourceApiUrl = agency?.apiSources?.[0]?.apiUrl || agency?.apiUrl || '';
+    if (!sourceApiUrl) return url.startsWith('/') ? null : `https://${url}`;
+
+    try {
+      const base = new URL(sourceApiUrl);
+      const cleanPath = url.startsWith('/') ? url : `/${url}`;
+      return `${base.protocol}//${base.host}${cleanPath}`;
+    } catch {
+      return url.startsWith('/') ? null : `https://${url}`;
+    }
   }
 }

@@ -217,6 +217,7 @@ model User {
   name      String?
   email     String?
   suggestionsOptIn Boolean @default(false)
+  welcomeWhatsAppSentAt DateTime? // set when first-login WATI welcome template is sent
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -174,6 +174,7 @@ export class ApifySyncService {
       'sourceUrl',
       'listing_url',
     );
+    const cdpBaseUrl = this.fieldMapper.extractString(item, 'cdp_base_url', 'cdpBaseUrl', 'base_url', 'baseUrl');
     const externalUrlValue = await this.constructExternalUrl(agencyId, externalUrlRaw);
     const brand = this.fieldMapper.extractBrand(item, model, externalUrlValue, 'brand', 'make', 'manufacturer');
     const variant = this.fieldMapper.extractString(item, 'variant', 'trim');
@@ -216,6 +217,7 @@ export class ApifySyncService {
       country,
       isAvailable,
       externalUrl: externalUrlValue,
+      cdpBaseUrl,
       ownership,
       images,
     };

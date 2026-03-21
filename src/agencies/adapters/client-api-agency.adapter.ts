@@ -172,6 +172,13 @@ export class ClientApiAgencyAdapter {
         'listingUrl',
         'cdp_relative_url',
       );
+      const cdpBaseUrl = this.fieldMapper.extractString(
+        item,
+        'cdp_base_url',
+        'cdpBaseUrl',
+        'base_url',
+        'baseUrl',
+      );
       const brand = this.fieldMapper.extractBrand(
         item,
         model,
@@ -241,6 +248,7 @@ export class ClientApiAgencyAdapter {
         country,
         isAvailable,
         externalUrl,
+        cdpBaseUrl,
         ownership,
         images,
       };

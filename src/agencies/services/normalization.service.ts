@@ -23,6 +23,7 @@ export class NormalizationService {
       country: rawListing.country,
       isAvailable: rawListing.isAvailable,
       externalUrl: rawListing.externalUrl,
+      cdpBaseUrl: rawListing.cdpBaseUrl,
       ownership: rawListing.ownership,
       images: rawListing.images,
       agency: {

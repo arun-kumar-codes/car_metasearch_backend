@@ -34,6 +34,7 @@ export class SearchService {
           if (agency?.integrationType !== 'APIFY' && hasExternalUrl) {
             const baseUrl = `${process.env.API_BASE_URL || 'http://localhost:3377'}/click/${listing.id}`;
             const params = new URLSearchParams({ url: listing.externalUrl!, agencyId: result.agencyId });
+            if (listing.cdpBaseUrl) params.set('cdpBaseUrl', listing.cdpBaseUrl);
             listing.trackingUrl = `${baseUrl}?${params.toString()}`;
           } else {
             listing.trackingUrl = undefined;
@@ -116,6 +117,7 @@ export class SearchService {
       const hasExternalUrl = normalized.externalUrl && String(normalized.externalUrl).trim();
       if (listing.agency.integrationType !== 'APIFY' && hasExternalUrl) {
         const params = new URLSearchParams({ url: normalized.externalUrl!, agencyId: listing.agencyId });
+        if (normalized.cdpBaseUrl) params.set('cdpBaseUrl', normalized.cdpBaseUrl);
         normalized.trackingUrl = `${baseUrl}/${normalized.id}?${params.toString()}`;
       } else {
         normalized.trackingUrl = undefined;
@@ -165,6 +167,7 @@ export class SearchService {
     if (listing.agency.integrationType !== 'APIFY' && hasExternalUrl) {
       const baseUrl = `${process.env.API_BASE_URL || 'http://localhost:3377'}/click/${normalized.id}`;
       const params = new URLSearchParams({ url: normalized.externalUrl!, agencyId: listing.agencyId });
+      if (normalized.cdpBaseUrl) params.set('cdpBaseUrl', normalized.cdpBaseUrl);
       normalized.trackingUrl = `${baseUrl}?${params.toString()}`;
     } else {
       normalized.trackingUrl = undefined;

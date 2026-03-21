@@ -22,6 +22,7 @@ export interface RawAgencyListing {
   country?: string;
   isAvailable?: boolean;
   externalUrl?: string;
+  cdpBaseUrl?: string;
   ownership?: string;
   images?: string[];
 }

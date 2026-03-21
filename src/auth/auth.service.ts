@@ -14,6 +14,7 @@ import { ResendVerifyPhoneOtpDto } from './dto/resend-verify-phone-otp.dto';
 import { AgencyUserLoginDto } from './dto/agency-user-login.dto';
 import { EmailService } from './services/email.service';
 import { SmsService } from './services/sms.service';
+import { WatiService } from '../wati/wati.service';
 import { Role } from './constants/roles';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class AuthService {
     private jwtService: JwtService,
     private emailService: EmailService,
     private smsService: SmsService,
+    private watiService: WatiService,
   ) {}
 
   async signup(signupDto: SignupDto) {
@@ -378,21 +380,30 @@ export class AuthService {
     if (!isValid) {
       throw new UnauthorizedException('Invalid or expired OTP');
     }
-    const existing = await this.prisma.user.findUnique({ where: { phone: normalizedPhone } });
+    const existing = await this.prisma.user.findUnique({
+      where: { phone: normalizedPhone },
+      select: { id: true, welcomeWhatsAppSentAt: true },
+    });
     const user = existing
       ? await this.prisma.user.findUniqueOrThrow({
           where: { id: existing.id },
-          select: { id: true, phone: true, name: true, email: true, suggestionsOptIn: true },
+          select: { id: true, phone: true, name: true, email: true, suggestionsOptIn: true, welcomeWhatsAppSentAt: true },
         })
       : await this.prisma.user.create({
           data: { phone: normalizedPhone },
-          select: { id: true, phone: true, name: true, email: true, suggestionsOptIn: true },
+          select: { id: true, phone: true, name: true, email: true, suggestionsOptIn: true, welcomeWhatsAppSentAt: true },
         });
     const accessToken = this.jwtService.sign({
       sub: user.id,
       phone: user.phone,
       role: Role.USER,
     });
+
+    // First-login welcome WhatsApp (WATI template new_user_1) – fire-and-forget
+    if (!user.welcomeWhatsAppSentAt) {
+      this.sendWelcomeWhatsAppAndMark(user.id, user.phone, user.name).catch(() => {});
+    }
+
     return {
       accessToken,
       user: {
@@ -403,5 +414,15 @@ export class AuthService {
         suggestionsOptIn: user.suggestionsOptIn,
       },
     };
+  }
+
+  private async sendWelcomeWhatsAppAndMark(userId: string, phone: string, name: string | null): Promise<void> {
+    const sent = await this.watiService.sendNewUserWelcome(phone, name);
+    if (sent) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { welcomeWhatsAppSentAt: new Date() },
+      });
+    }
   }
 }

@@ -6,13 +6,19 @@ import { ListingResponseDto } from '../search/dto/listing-response.dto';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
-const SYSTEM_PROMPT_BASE = `You are Atlas, a friendly used-car search assistant in India. Talk like a helpful person, not a bot. Reply in 1-3 short sentences. Use markdown for emphasis (**bold**). Do not invent listing IDs, prices, or car counts.`;
+const SYSTEM_PROMPT_BASE = `You are Atlas, a friendly used-car search partner for this car search app in India. You ONLY help with:
+- Finding or searching for used cars (by brand, model, budget, city, fuel type, etc.)
+- Explaining search results, filters, or how to use the app
+- Helping users narrow down or refine their car search
+
+If the user asks about anything else (weather, general knowledge, other topics), reply in a friendly way: you're here to help with car search on this app, and suggest they try something like "Show me Swift under 5 lakh" or "Best diesel SUVs in Mumbai". Be warm and brief (1-2 sentences). Use markdown for emphasis (**bold**). Do not invent listing IDs, prices, or car counts.`;
 
 const EXTRACTION_SYSTEM = `You extract search intent from the user's message for a used-car search in India. Return ONLY a valid JSON object, no other text. Use this exact shape:
 {"city": "string or null", "brand": "string or null", "model": "string or null"}
 
 Rules:
-- city: Indian city name with correct spelling (e.g. Noida, Delhi, New Delhi, Mumbai, Bangalore, Pune, Gurgaon, Ghaziabad). Fix misspellings (e.g. noidaa->Noida, delhii->Delhi, mumbi->Mumbai, creata in noida -> city Noida). If the user did not mention a city, use null.
+- city: Indian city name with correct spelling (e.g. Noida, Delhi, New Delhi, Mumbai, Bangalore, Pune, Gurgaon, Ghaziabad). Fix misspellings. If the user says "my area", "near me", "in my area", "around here", "my city", or "available cars" without naming a city, use null (the app will use their current location).
+- If the user did not mention a city and did not say "my area" etc., use null.
 - brand: Car manufacturer (e.g. Hyundai, Maruti, Tata, Honda, Toyota, Mahindra). Fix misspellings.
 - model: Car model name (e.g. Creta, Swift, Baleno, Nexon). Fix misspellings like creata/creta->Creta, swift->Swift.
 - If the user did not mention a city, brand, or model, set that key to null.
@@ -42,7 +48,7 @@ export class ChatService {
     const apiKey = this.getApiKey();
     if (!apiKey) return {};
 
-    const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-3.5-turbo';
+    const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-5-nano';
     const historyContext = (history || [])
       .slice(-4)
       .map((m) => `${m.role}: ${m.content}`)
@@ -101,6 +107,7 @@ export class ChatService {
     message: string,
     context: {
       requestCity?: string;
+      effectiveCity?: string;
       history?: Array<{ role: 'user' | 'assistant'; content: string }>;
       listingsCount: number;
       userSpecifiedCity: boolean;
@@ -111,27 +118,32 @@ export class ChatService {
       return "Chat is not configured. Set OPENROUTER_API_KEY (or OPENAI_API_KEY) in the backend .env with your OpenRouter key.";
     }
 
-    const { requestCity, history, listingsCount, userSpecifiedCity } = context;
-    const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-3.5-turbo';
+    const { requestCity, effectiveCity, history, listingsCount, userSpecifiedCity } =
+      context;
+    const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-5-nano';
     const historyMessages = (history || []).slice(-20).map((m) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
 
     let systemPrompt = SYSTEM_PROMPT_BASE + '\n\n';
-    if (!userSpecifiedCity) {
-      systemPrompt += `The user has NOT specified a city. Do NOT assume or use any default city (e.g. do not use their location). Ask them naturally: "In which city are you looking for cars?" or "Which city or area do you prefer?" Be conversational.`;
+    const cityForReply = requestCity || effectiveCity;
+    const hasLocation = !!cityForReply;
+    if (userSpecifiedCity) {
+      systemPrompt += `The user mentioned a city. You may reference it in your reply.`;
+    } else if (hasLocation) {
+      systemPrompt += `We are using the user's current location (${cityForReply}) for this search. Reply as a helpful partner: mention we're showing cars in ${cityForReply}. Do NOT ask them which city—we already have their location.`;
     } else {
-      systemPrompt += `The user has specified a city. You may reference it in your reply.`;
+      systemPrompt += `The user has NOT specified a city and we have no location. Ask them naturally: "In which city are you looking for cars?" or "Which city do you prefer?" Be conversational.`;
     }
     if (listingsCount === 0) {
-      systemPrompt += `\n\nImportant: Our search found ZERO matching cars. Do NOT say you will show cars, have options, or list anything. Say honestly that we don't have any matching listings right now, and suggest they try a different city, different car, or use the search filters.`;
+      systemPrompt += `\n\nImportant: Our search found ZERO matching cars. Do NOT say you will show cars, have options, or list anything. Say honestly that we don't have any matching listings right now for ${requestCity || 'that area'}, and suggest they try a different city, different car, or use the search filters.`;
     } else {
-      systemPrompt += `\n\nOur search found ${listingsCount} matching listing(s). You can say we have some options to show.`;
+      systemPrompt += `\n\nOur search found ${listingsCount} matching listing(s). Reply briefly and invite them to check the results below.`;
     }
 
-    const currentUserContent = requestCity && userSpecifiedCity
-      ? `[User's location context: ${requestCity}.] User: ${message}`
+    const currentUserContent = hasLocation
+      ? `[Search location: ${cityForReply}.] User: ${message}`
       : message;
     const messages: Array<{ role: string; content: string }> = [
       { role: 'system', content: systemPrompt },
@@ -174,7 +186,20 @@ export class ChatService {
       return "Sorry, I couldn't process that. Please try again or use the search filters below.";
     }
     const content = data?.choices?.[0]?.message?.content?.trim();
-    return content || "I'm not sure how to help with that. Try asking for a car by brand, budget, or city, or use the search form below.";
+    if (content) return content;
+
+    // If the LLM fails (empty output), still be a good "partner" by summarizing the search truthfully.
+    const fallbackCity = cityForReply;
+    if (listingsCount === 0) {
+      if (fallbackCity) {
+        return `I couldn't find matching listings in **${fallbackCity}** right now. Try a different city, brand/model, or adjust your budget/filters.`;
+      }
+      return `I couldn't find matching listings right now. Tell me your **city** and what you're looking for (brand/model/budget), and I'll help you search.`;
+    }
+    if (fallbackCity) {
+      return `I found **${listingsCount}** matching car(s) in **${fallbackCity}**—check the results below. Want to filter by **budget**, **brand**, or **fuel type**?`;
+    }
+    return `I found **${listingsCount}** matching car(s)—check the results below. Tell me your **city** if you want more accurate results.`;
   }
 
   async chat(params: {
@@ -207,6 +232,7 @@ export class ChatService {
 
     const reply = await this.getReply(message, {
       requestCity: city,
+      effectiveCity: searchCity,
       history,
       listingsCount: listings.length,
       userSpecifiedCity,

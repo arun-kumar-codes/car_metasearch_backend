@@ -8,6 +8,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { EmailService } from './services/email.service';
 import { SmsService } from './services/sms.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { WatiModule } from '../wati/wati.module';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ApprovalGuard } from './guards/approval.guard';
@@ -15,6 +16,7 @@ import { ApprovalGuard } from './guards/approval.guard';
 @Module({
   imports: [
     PrismaModule,
+    WatiModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
