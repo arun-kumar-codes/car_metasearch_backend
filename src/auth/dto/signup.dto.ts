@@ -1,10 +1,8 @@
-import { IsString, IsPhoneNumber, MinLength, Matches } from 'class-validator';
+import { IsString, MinLength } from 'class-validator';
 
 export class SignupDto {
   @IsString()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { 
-    message: 'Phone number must be in E.164 format. Include country code.' 
-  })
+  @MinLength(1, { message: 'Phone number is required' })
   phone: string;
 
   @IsString()

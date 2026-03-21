@@ -1,4 +1,4 @@
-import { IsString, IsEmail, IsOptional, IsUrl, Matches } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsUrl } from 'class-validator';
 
 export class OnboardingStep2Dto {
   @IsString()
@@ -14,9 +14,6 @@ export class OnboardingStep2Dto {
 
   @IsString()
   @IsOptional()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { 
-    message: 'WhatsApp number must be in E.164 format' 
-  })
   whatsappNumber?: string;
 
   @IsUrl()

@@ -1,7 +1,7 @@
-import { IsString, Matches } from 'class-validator';
+import { IsString, MinLength } from 'class-validator';
 
 export class ForgotPasswordDto {
   @IsString()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Phone number must be in E.164 format' })
+  @MinLength(1, { message: 'Phone number is required' })
   phone: string;
 }

@@ -1,8 +1,8 @@
-import { IsString, IsOptional, Matches } from 'class-validator';
+import { IsString, IsOptional, MinLength } from 'class-validator';
 
 export class LoginDto {
   @IsString()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Phone number must be in E.164 format' })
+  @MinLength(1, { message: 'Phone number is required' })
   phone: string;
 
   @IsString()
