@@ -9,6 +9,16 @@ export class ChatHistoryMessageDto {
   content: string;
 }
 
+export class ChatStateDto {
+  /**
+   * Last city explicitly mentioned in chat, persisted by the frontend.
+   * Backend uses it as the conversation-level city memory.
+   */
+  @IsString()
+  @IsOptional()
+  lastCityMemory?: string;
+}
+
 export class ChatRequestDto {
   @IsString()
   message: string;
@@ -24,6 +34,11 @@ export class ChatRequestDto {
   @IsString()
   @IsOptional()
   conversationId?: string;
+
+  @ValidateNested()
+  @Type(() => ChatStateDto)
+  @IsOptional()
+  chatState?: ChatStateDto;
 
   @IsArray()
   @IsOptional()

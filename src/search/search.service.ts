@@ -16,8 +16,9 @@ export class SearchService {
   ) {}
 
   async search(query: SearchQueryDto): Promise<SearchResponseDto> {
-    const { page = 1, limit = 50, sortBy = 'price_asc' } = query;
-    const agencyResults = await this.agencyOrchestrator.searchAllAgencies(query);
+    const normalizedQuery = this.normalizeLocationAliases(query);
+    const { page = 1, limit = 50, sortBy = 'price_asc' } = normalizedQuery;
+    const agencyResults = await this.agencyOrchestrator.searchAllAgencies(normalizedQuery);
     const allListings: ListingResponseDto[] = [];
 
     for (const result of agencyResults) {
@@ -75,6 +76,62 @@ export class SearchService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Normalize common city/state aliases in the incoming search filters.
+   *
+   * Why:
+   * - Manual listings may store `city=Delhi` while UI sends `city=New Delhi`.
+   * - UI may send `state=National Capital Territory of Delhi` while listings store `state=Delhi`.
+   * - We normalize the query filters so `contains` matching behaves as expected.
+   */
+  private normalizeLocationAliases(query: SearchQueryDto): SearchQueryDto {
+    const city = query.city ? String(query.city).trim() : "";
+    const state = query.state ? String(query.state).trim() : undefined;
+
+    const normCityLower = city.toLowerCase();
+    const normStateLower = state ? state.toLowerCase() : undefined;
+
+    const normalizedCity = (() => {
+      if (!city) return city;
+      // Delhi aliases
+      if (
+        normCityLower.includes("new delhi") ||
+        normCityLower === "delhi" ||
+        normCityLower.includes(" delhi") ||
+        normCityLower.includes("delhi")
+      ) {
+        return "Delhi";
+      }
+      // Gurgaon aliases
+      if (normCityLower.includes("gurugram") || normCityLower.includes("gurgaon")) return "Gurgaon";
+      // Bangalore aliases
+      if (normCityLower.includes("bengaluru") || normCityLower.includes("bangalore")) return "Bangalore";
+      // Mumbai aliases
+      if (normCityLower.includes("mumbai") || normCityLower.includes("bombay")) return "Mumbai";
+      return city;
+    })();
+
+    const normalizedState = (() => {
+      if (!state) return state;
+      if (
+        normStateLower?.includes("national capital territory") ||
+        normStateLower?.includes("nct of delhi") ||
+        normStateLower?.includes("nct") ||
+        normStateLower?.includes("delhi")
+      ) {
+        return "Delhi";
+      }
+      return state;
+    })();
+
+    // Return a shallow clone so the rest of the pipeline uses normalized values.
+    return {
+      ...query,
+      city: normalizedCity,
+      state: normalizedState,
     };
   }
 

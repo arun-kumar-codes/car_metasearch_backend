@@ -74,6 +74,13 @@ export class SearchQueryDto {
   @IsInt()
   @Type(() => Number)
   @IsOptional()
+  @Min(1900)
+  @Max(new Date().getFullYear() + 1)
+  maxYear?: number;
+
+  @IsInt()
+  @Type(() => Number)
+  @IsOptional()
   @Min(1)
   page?: number = 1;
 

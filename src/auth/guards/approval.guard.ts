@@ -15,15 +15,13 @@ export class ApprovalGuard implements CanActivate {
     if (isPlatformAdmin(user.role)) return true;
     if (!isDealerRole(user.role)) return false;
 
+    const agencyId = (user as any).agencyId ?? user.id;
     const agency = await this.prisma.agency.findUnique({
-      where: { id: user.id },
+      where: { id: agencyId },
       select: { approvalStatus: true, onboardingStatus: true },
     });
 
     if (!agency) throw new ForbiddenException('Agency not found');
-    if (agency.approvalStatus !== 'APPROVED') {
-      throw new ForbiddenException('Your agency is pending approval from superadmin. Please wait for approval.');
-    }
     if (agency.onboardingStatus !== 'COMPLETED') {
       throw new ForbiddenException('Please complete onboarding first.');
     }

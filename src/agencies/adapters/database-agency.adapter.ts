@@ -25,15 +25,15 @@ export class DatabaseAgencyAdapter {
       if (query.variant) {
         where.variant = { contains: query.variant, mode: 'insensitive' };
       }
-      if (query.year || query.minYear) {
-        if (query.year && !query.minYear) {
-          where.year = query.year;
-        } else if (query.minYear) {
-          where.year = {
-            gte: query.minYear,
-            ...(query.year ? { lte: query.year } : {}),
-          };
-        }
+      // Year precedence:
+      // - If `year` is provided, treat it as an exact match.
+      // - Else apply `minYear`/`maxYear` range filtering.
+      if (query.year !== undefined) {
+        where.year = query.year;
+      } else if (query.minYear !== undefined || query.maxYear !== undefined) {
+        where.year = {};
+        if (query.minYear !== undefined) where.year.gte = query.minYear;
+        if (query.maxYear !== undefined) where.year.lte = query.maxYear;
       }
       if (query.minPrice !== undefined || query.maxPrice !== undefined) {
         where.price = {};
@@ -49,7 +49,16 @@ export class DatabaseAgencyAdapter {
         where.city = { contains: query.city, mode: 'insensitive' };
       }
       if (query.state) {
-        where.state = { contains: query.state, mode: 'insensitive' };
+        // Some manual/scraped records may have missing/empty `state`.
+        // When user applies a state filter, we still want to show those listings
+        // as long as `city` matches.
+        // Prisma evaluates `OR` most reliably at the top-level `where`.
+        // This keeps the logic: city AND (state matches OR state missing).
+        where.OR = [
+          { state: { contains: query.state, mode: 'insensitive' } },
+          { state: null },
+          { state: '' },
+        ];
       }
       if (query.fuelType) {
         where.fuelType = { equals: query.fuelType, mode: 'insensitive' };

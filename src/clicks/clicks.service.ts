@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 const CPL_SESSION_DAYS = 15;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class ClicksService {
@@ -12,40 +13,102 @@ export class ClicksService {
    * Same user (by ipAddress) counts as 1 CPL per 15-day window; after 15 days, next navigation counts as 2.
    */
   async getCplCount15DaySession(agencyId: string, startDate?: Date, endDate?: Date): Promise<number> {
-    const where: { agencyId: string; createdAt?: any } = { agencyId };
-    if (startDate || endDate) {
+    const { totalLeads } = await this.getLeadsByListing15DaySession(agencyId, startDate, endDate);
+    return totalLeads;
+  }
+
+  /**
+   * Dedupe engine for "lead counting" used for CPL billing.
+   *
+   * Spec:
+   * - For the same user (by `ipAddress`) and the same `listingId`,
+   * - count at most 1 lead per 15-day window;
+   * - after 15 days from the last counted lead, the next navigation counts as a new lead.
+   *
+   * For billing ranges, we do a 15-day lookback so we don't overcount at period boundaries.
+   */
+  private async getLeadsByListing15DaySession(
+    agencyId: string,
+    startDate?: Date,
+    endDate?: Date,
+  ): Promise<{
+    totalLeads: number;
+    leadsByListing: Array<{ listingId: string | null; _count: { id: number } }>;
+    leadsByDate: Record<string, number>;
+  }> {
+    const windowMs = CPL_SESSION_DAYS * DAY_MS;
+    const rangeStartMs = startDate?.getTime() ?? -Infinity;
+    const rangeEndMs = endDate?.getTime() ?? Infinity;
+
+    // Look back so "last counted lead" state is correct near the boundary.
+    const lookbackStartDate = startDate ? new Date(startDate.getTime() - windowMs) : undefined;
+
+    const where: any = { agencyId };
+    if (lookbackStartDate || endDate) {
       where.createdAt = {};
-      if (startDate) where.createdAt.gte = startDate;
+      if (lookbackStartDate) where.createdAt.gte = lookbackStartDate;
       if (endDate) where.createdAt.lte = endDate;
     }
+
     const clicks = await this.prisma.click.findMany({
       where,
-      select: { ipAddress: true, createdAt: true },
+      select: { listingId: true, ipAddress: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
-    const byFingerprint = new Map<string, Date[]>();
-    for (const c of clicks) {
-      const key = c.ipAddress?.trim() || 'unknown';
-      if (!byFingerprint.has(key)) byFingerprint.set(key, []);
-      byFingerprint.get(key)!.push(c.createdAt);
-    }
-    let sessions = 0;
-    for (const dates of byFingerprint.values()) {
-      let lastInWindow: Date | null = null;
-      for (const d of dates) {
-        if (lastInWindow === null) {
-          sessions += 1;
-          lastInWindow = d;
-          continue;
-        }
-        const daysSince = (d.getTime() - lastInWindow.getTime()) / (24 * 60 * 60 * 1000);
-        if (daysSince > CPL_SESSION_DAYS) {
-          sessions += 1;
-          lastInWindow = d;
+
+    type GroupState = {
+      listingId: string | null;
+      lastLeadAtMs: number | null;
+      leadCountInRange: number;
+    };
+
+    // Keyed by listingId + ipAddress (per spec).
+    const stateByGroupKey = new Map<string, GroupState>();
+    const leadsByDate: Record<string, number> = {};
+
+    let totalLeads = 0;
+
+    for (const click of clicks) {
+      const ipKey = click.ipAddress?.trim() || 'unknown';
+      const listingId = click.listingId ?? null;
+      const groupKey = `${listingId ?? 'null'}|${ipKey}`;
+
+      let state = stateByGroupKey.get(groupKey);
+      if (!state) {
+        state = { listingId, lastLeadAtMs: null, leadCountInRange: 0 };
+        stateByGroupKey.set(groupKey, state);
+      }
+
+      const tMs = click.createdAt.getTime();
+
+      const isFirstLead = state.lastLeadAtMs === null;
+      const diffMs = state.lastLeadAtMs === null ? Infinity : tMs - state.lastLeadAtMs;
+      const isNewLead = isFirstLead || diffMs > windowMs;
+
+      if (isNewLead) {
+        state.lastLeadAtMs = tMs;
+        const inRange = tMs >= rangeStartMs && tMs <= rangeEndMs;
+        if (inRange) {
+          state.leadCountInRange += 1;
+          totalLeads += 1;
+          const dateKey = click.createdAt.toISOString().split('T')[0];
+          leadsByDate[dateKey] = (leadsByDate[dateKey] || 0) + 1;
         }
       }
     }
-    return sessions;
+
+    const leadsByListingMap = new Map<string | null, number>();
+    for (const state of stateByGroupKey.values()) {
+      const current = leadsByListingMap.get(state.listingId) ?? 0;
+      leadsByListingMap.set(state.listingId, current + state.leadCountInRange);
+    }
+
+    const leadsByListing = Array.from(leadsByListingMap.entries()).map(([listingId, count]) => ({
+      listingId: listingId ?? null,
+      _count: { id: count },
+    }));
+
+    return { totalLeads, leadsByListing, leadsByDate };
   }
 
   async trackClick(
@@ -88,13 +151,19 @@ export class ClicksService {
       if (startDate) where.createdAt.gte = startDate;
       if (endDate) where.createdAt.lte = endDate;
     }
+
     const totalClicks = await this.prisma.click.count({ where });
-    const totalLeads = await this.getCplCount15DaySession(agencyId, startDate, endDate);
     const agency = await this.prisma.agency.findUnique({
       where: { id: agencyId },
       select: { cpl: true },
     });
     const cpl = agency?.cpl ?? 0;
+
+    const { totalLeads, leadsByListing, leadsByDate } = await this.getLeadsByListing15DaySession(
+      agencyId,
+      startDate,
+      endDate,
+    );
     const totalCost = totalLeads * cpl;
     const clicksByListing = await this.prisma.click.groupBy({
       by: ['listingId'],
@@ -112,8 +181,6 @@ export class ClicksService {
       acc[date] = (acc[date] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const leadsByListing = clicksByListing;
-    const leadsByDate = clicksByDate;
     return {
       totalClicks,
       totalCost,

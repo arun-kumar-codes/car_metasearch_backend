@@ -1,8 +1,12 @@
-import { Controller, Get, Query, Param, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Query, Param, ParseUUIDPipe, UseGuards } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
 import { AutocompleteQueryDto } from './dto/autocomplete-query.dto';
 import { ListQueryDto } from './dto/list-query.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { Role } from '../auth/constants/roles';
 
 @Controller('search')
 export class SearchController {
@@ -21,6 +25,8 @@ export class SearchController {
   }
 
   @Get('listings/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.USER)
   async getById(@Param('id', ParseUUIDPipe) id: string) {
     const listing = await this.searchService.getById(id);
     if (!listing) return { listing: null };

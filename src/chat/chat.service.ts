@@ -14,20 +14,34 @@ const SYSTEM_PROMPT_BASE = `You are Atlas, a friendly used-car search partner fo
 If the user asks about anything else (weather, general knowledge, other topics), reply in a friendly way: you're here to help with car search on this app, and suggest they try something like "Show me Swift under 5 lakh" or "Best diesel SUVs in Mumbai". Be warm and brief (1-2 sentences). Use markdown for emphasis (**bold**). Do not invent listing IDs, prices, or car counts.`;
 
 const EXTRACTION_SYSTEM = `You extract search intent from the user's message for a used-car search in India. Return ONLY a valid JSON object, no other text. Use this exact shape:
-{"city": "string or null", "brand": "string or null", "model": "string or null"}
+{"city": null, "brand": "string or null", "model": "string or null"}
 
 Rules:
-- city: Indian city name with correct spelling (e.g. Noida, Delhi, New Delhi, Mumbai, Bangalore, Pune, Gurgaon, Ghaziabad). Fix misspellings. If the user says "my area", "near me", "in my area", "around here", "my city", or "available cars" without naming a city, use null (the app will use their current location).
-- If the user did not mention a city and did not say "my area" etc., use null.
+- city must ALWAYS be null (city resolution is handled by the backend resolver, not the LLM)
 - brand: Car manufacturer (e.g. Hyundai, Maruti, Tata, Honda, Toyota, Mahindra). Fix misspellings.
 - model: Car model name (e.g. Creta, Swift, Baleno, Nexon). Fix misspellings like creata/creta->Creta, swift->Swift.
-- If the user did not mention a city, brand, or model, set that key to null.
-- Consider the full conversation: if the user said "in noida" in a previous message and now says "show me creta", extract city Noida and model Creta.`;
+- If the user did not mention a brand or model, set that key to null.
+- Consider the full conversation when extracting brand/model (e.g. if the user earlier said "in Noida" and now says "show me Creta", extract model Creta).`;
 
 export interface SearchHints {
-  city?: string;
   brand?: string;
   model?: string;
+}
+
+type ChatCitySource = 'currentMessage' | 'chatMemory' | 'requestCity' | 'resetToRequest' | 'none';
+
+export interface ChatState {
+  /**
+   * The last city explicitly mentioned in chat (or reset to website location),
+   * persisted and sent back by the frontend.
+   */
+  lastCityMemory?: string;
+  /**
+   * City used for this request.
+   */
+  resolvedCity?: string;
+  citySource?: ChatCitySource;
+  stage?: 'search' | 'advisory';
 }
 
 @Injectable()
@@ -36,6 +50,191 @@ export class ChatService {
     private config: ConfigService,
     private searchService: SearchService,
   ) {}
+
+  private static knownCitiesCache: { cities: string[]; fetchedAtMs: number } | null = null;
+  private static knownCitiesTtlMs = 6 * 60 * 60 * 1000; // 6 hours
+
+  private async getKnownCities(): Promise<string[]> {
+    const now = Date.now();
+    if (
+      ChatService.knownCitiesCache &&
+      now - ChatService.knownCitiesCache.fetchedAtMs < ChatService.knownCitiesTtlMs
+    ) {
+      return ChatService.knownCitiesCache.cities;
+    }
+    const cities = await this.searchService.getCities();
+    ChatService.knownCitiesCache = { cities, fetchedAtMs: now };
+    return cities;
+  }
+
+  private normalizeCity(s: string): string {
+    return String(s).toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  private async parseCityDeterministically(message: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string | undefined> {
+    const cities = await this.getKnownCities().catch(() => []);
+
+    const currentText = String(message).toLowerCase();
+
+    // Handle common alias forms explicitly, but PRIORITIZE current message.
+    // This ensures "whatever city we select should not matter when mentioning another city in chat".
+    if (/\bnew delhi\b|\bdelhi\b/.test(currentText)) return "Delhi";
+    if (/\bgurugram\b|\bgurgaon\b/.test(currentText)) return "Gurgaon";
+    if (/\bbengaluru\b|\bbangalore\b/.test(currentText)) return "Bangalore";
+    if (/\bmumbai\b|\bbombay\b/.test(currentText)) return "Mumbai";
+
+    const userMsgs = (history || [])
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .slice(-6);
+
+    // Only fall back to history if current message didn't mention a city.
+    const text = [userMsgs.join(" "), message].join(" ").toLowerCase();
+
+    // Basic substring match against known cities.
+    // Helps when LLM extraction fails or when user types "in Pune".
+    // Prefer matches from the current message; only fall back to history if nothing is found.
+    for (const c of cities) {
+      const nc = this.normalizeCity(c);
+      if (!nc) continue;
+      if (currentText.includes(nc)) return c;
+    }
+
+    // Fallback: allow history to contribute only when the current message is ambiguous.
+    for (const c of cities) {
+      const nc = this.normalizeCity(c);
+      if (!nc) continue;
+      if (text.includes(nc)) return c;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract the last mentioned city from ONLY the current user message.
+   * Uses known city list + alias groups to avoid "nearby NCR" bias.
+   */
+  private async extractLastCityMentionFromMessage(message: string): Promise<string | undefined> {
+    const cities = await this.getKnownCities().catch(() => []);
+    if (!message) return undefined;
+
+    const msgNormalized = this.normalizeCity(message);
+
+    // Alias groups map common user spellings to canonical cities present in the DB.
+    const aliasGroups: Array<{ variants: string[] }> = [
+      { variants: ['new delhi', 'delhi'] },
+      { variants: ['gurugram', 'gurgaon'] },
+      { variants: ['bengaluru', 'bangalore'] },
+      { variants: ['mumbai', 'bombay'] },
+    ];
+
+    const candidates: Array<{ city: string; index: number }> = [];
+
+    // 1) Direct city substring matches against known city names.
+    for (const c of cities) {
+      const nc = this.normalizeCity(c);
+      if (!nc) continue;
+      const idx = msgNormalized.lastIndexOf(nc);
+      if (idx >= 0) candidates.push({ city: c, index: idx });
+    }
+
+    // 2) Alias variant matches -> map to the best canonical city from known cities.
+    for (const group of aliasGroups) {
+      const normalizedVariants = group.variants.map((v) => this.normalizeCity(v));
+
+      const bestCanonical = (() => {
+        const matches: string[] = [];
+        for (const c of cities) {
+          const nc = this.normalizeCity(c);
+          if (!nc) continue;
+          if (normalizedVariants.some((v) => v && nc.includes(v))) matches.push(c);
+        }
+        if (matches.length === 0) return undefined;
+        matches.sort((a, b) => this.normalizeCity(b).length - this.normalizeCity(a).length);
+        return matches[0];
+      })();
+
+      if (!bestCanonical) continue;
+
+      for (const v of normalizedVariants) {
+        if (!v) continue;
+        const idx = msgNormalized.lastIndexOf(v);
+        if (idx >= 0) candidates.push({ city: bestCanonical, index: idx });
+      }
+    }
+
+    if (candidates.length === 0) return undefined;
+    candidates.sort((a, b) => (b.index - a.index) || (this.normalizeCity(b.city).length - this.normalizeCity(a.city).length));
+    return candidates[0]?.city;
+  }
+
+  /**
+   * Conversation-level city resolver (strict precedence):
+   * 1) city in current user message
+   * 2) chatState.lastCityMemory
+   * 3) requestCity only when no chat memory exists
+   * 4) if still missing, return undefined (caller should ask user)
+   */
+  private async resolveChatCity(params: {
+    message: string;
+    requestCity?: string;
+    chatState?: ChatState;
+  }): Promise<{ resolvedCity?: string; lastCityMemory?: string; userMentionedCity: boolean; citySource: ChatCitySource }> {
+    const { message, requestCity, chatState } = params;
+    const messageLower = String(message || '').toLowerCase();
+
+    const resetRequested =
+      /\buse my location\b|\buse my city\b|\buse website city\b|\bnear me\b|\bmy area\b|\baround here\b/.test(messageLower);
+
+    const mentionedCity = await this.extractLastCityMentionFromMessage(message).catch(() => undefined);
+
+    // 1) City explicitly mentioned in current user message.
+    if (mentionedCity) {
+      return {
+        resolvedCity: mentionedCity,
+        lastCityMemory: mentionedCity,
+        userMentionedCity: true,
+        citySource: 'currentMessage',
+      };
+    }
+
+    // 2) Reset command to website/current location.
+    if (resetRequested && requestCity) {
+      return {
+        resolvedCity: requestCity,
+        lastCityMemory: requestCity,
+        userMentionedCity: false,
+        citySource: 'resetToRequest',
+      };
+    }
+
+    // 3) Conversation memory.
+    if (chatState?.lastCityMemory) {
+      return {
+        resolvedCity: chatState.lastCityMemory,
+        lastCityMemory: chatState.lastCityMemory,
+        userMentionedCity: false,
+        citySource: 'chatMemory',
+      };
+    }
+
+    // 4) Website / location fallback only when no memory exists.
+    if (requestCity) {
+      return {
+        resolvedCity: requestCity,
+        lastCityMemory: chatState?.lastCityMemory,
+        userMentionedCity: false,
+        citySource: 'requestCity',
+      };
+    }
+
+    return {
+      resolvedCity: undefined,
+      lastCityMemory: chatState?.lastCityMemory,
+      userMentionedCity: false,
+      citySource: 'none',
+    };
+  }
 
   /**
    * Use the LLM to extract city, brand, model from the user message. Handles misspellings
@@ -46,12 +245,16 @@ export class ChatService {
     history?: Array<{ role: 'user' | 'assistant'; content: string }>,
   ): Promise<SearchHints> {
     const apiKey = this.getApiKey();
-    if (!apiKey) return {};
+    if (!apiKey) {
+      return {};
+    }
 
     const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-5-nano';
+    // Avoid bias from assistant messages (like welcome examples) when extracting city.
     const historyContext = (history || [])
+      .filter((m) => m.role === 'user')
       .slice(-4)
-      .map((m) => `${m.role}: ${m.content}`)
+      .map((m) => `user: ${m.content}`)
       .join('\n');
     const userContent = historyContext
       ? `Conversation so far:\n${historyContext}\n\nLatest user message: ${message}\n\nReturn JSON only.`
@@ -84,14 +287,15 @@ export class ChatService {
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (jsonMatch) raw = jsonMatch[0];
       if (!raw) return {};
-      const parsed = JSON.parse(raw) as { city?: string | null; brand?: string | null; model?: string | null };
+      const parsed = JSON.parse(raw) as { brand?: string | null; model?: string | null };
       const str = (v: string | null | undefined) => (v && String(v).trim()) || undefined;
+
       return {
-        city: str(parsed.city),
         brand: str(parsed.brand),
         model: str(parsed.model),
       };
     } catch {
+      // If extraction fails entirely, fall back to no brand/model hints.
       return {};
     }
   }
@@ -110,7 +314,10 @@ export class ChatService {
       effectiveCity?: string;
       history?: Array<{ role: 'user' | 'assistant'; content: string }>;
       listingsCount: number;
-      userSpecifiedCity: boolean;
+      userMentionedCity: boolean;
+      citySource: ChatCitySource;
+      stage: 'search' | 'advisory';
+      needsClarification: boolean;
     },
   ): Promise<string> {
     const apiKey = this.getApiKey();
@@ -118,8 +325,16 @@ export class ChatService {
       return "Chat is not configured. Set OPENROUTER_API_KEY (or OPENAI_API_KEY) in the backend .env with your OpenRouter key.";
     }
 
-    const { requestCity, effectiveCity, history, listingsCount, userSpecifiedCity } =
-      context;
+    const {
+      requestCity,
+      effectiveCity,
+      history,
+      listingsCount,
+      userMentionedCity,
+      citySource,
+      stage,
+      needsClarification,
+    } = context;
     const model = this.config.get<string>('OPENROUTER_MODEL') || 'openai/gpt-5-nano';
     const historyMessages = (history || []).slice(-20).map((m) => ({
       role: m.role as 'user' | 'assistant',
@@ -127,17 +342,30 @@ export class ChatService {
     }));
 
     let systemPrompt = SYSTEM_PROMPT_BASE + '\n\n';
-    const cityForReply = requestCity || effectiveCity;
+    const cityForReply = effectiveCity || requestCity;
     const hasLocation = !!cityForReply;
-    if (userSpecifiedCity) {
-      systemPrompt += `The user mentioned a city. You may reference it in your reply.`;
+
+    if (userMentionedCity && cityForReply) {
+      systemPrompt += `The user explicitly mentioned a city (${cityForReply}). You may reference it in your reply.`;
     } else if (hasLocation) {
-      systemPrompt += `We are using the user's current location (${cityForReply}) for this search. Reply as a helpful partner: mention we're showing cars in ${cityForReply}. Do NOT ask them which city—we already have their location.`;
+      if (citySource === 'chatMemory') {
+        systemPrompt += `No city was provided in the latest message, so we are using your last mentioned city (${cityForReply}) from earlier chat.`;
+      } else if (citySource === 'resetToRequest') {
+        systemPrompt += `You asked to use your website/current location, so we are using (${cityForReply}).`;
+      } else {
+        systemPrompt += `We are using the user's current location/website city (${cityForReply}). Do NOT ask them which city—we already have it.`;
+      }
     } else {
-      systemPrompt += `The user has NOT specified a city and we have no location. Ask them naturally: "In which city are you looking for cars?" or "Which city do you prefer?" Be conversational.`;
+      systemPrompt += `We do not have a city for this chat yet. Ask naturally: "Which city are you looking for cars in?"`;
+    }
+
+    if (stage === 'advisory') {
+      systemPrompt += `\n\nAdvisory style: reply as a person-like assistant. Start with a concise line that confirms the intent and the city. If needsClarification is true, ask 1-2 targeted follow-up questions before going deeper. Keep it brief (no long essays).`;
+    } else {
+      systemPrompt += `\n\nSearch style: be concise, then invite the user to check matching results.`;
     }
     if (listingsCount === 0) {
-      systemPrompt += `\n\nImportant: Our search found ZERO matching cars. Do NOT say you will show cars, have options, or list anything. Say honestly that we don't have any matching listings right now for ${requestCity || 'that area'}, and suggest they try a different city, different car, or use the search filters.`;
+      systemPrompt += `\n\nImportant: Our search found ZERO matching cars. Do NOT say you will show cars, have options, or list anything. Say honestly that we don't have any matching listings right now for ${cityForReply || 'that area'}, and suggest they try a different city, different car, or use the search filters.`;
     } else {
       systemPrompt += `\n\nOur search found ${listingsCount} matching listing(s). Reply briefly and invite them to check the results below.`;
     }
@@ -205,19 +433,50 @@ export class ChatService {
   async chat(params: {
     message: string;
     city?: string;
+    conversationId?: string;
     listingIds?: string[];
+    chatState?: ChatState;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
-  }): Promise<{ reply: string; listings: ListingResponseDto[] }> {
-    const { message, city, listingIds, history } = params;
+  }): Promise<{ reply: string; listings: ListingResponseDto[]; chatState?: ChatState }> {
+    const { message, city: requestCity, listingIds, history, chatState } = params;
+
+    const cityResolution = await this.resolveChatCity({
+      message,
+      requestCity,
+      chatState,
+    });
+    const searchCity = cityResolution.resolvedCity;
+
+    if (process.env.NODE_ENV !== 'production') {
+      // Helpful for verifying precedence decisions during development.
+      console.debug('[chat][cityResolver]', {
+        source: cityResolution.citySource,
+        resolvedCity: searchCity,
+        userMentionedCity: cityResolution.userMentionedCity,
+        hasChatMemory: Boolean(chatState?.lastCityMemory),
+      });
+    }
+
+    const messageLower = String(message || '').toLowerCase();
+    const isRecommendationRequest =
+      /\b(best|recommend|suggest|choose|which one|compare|help me choose|i should)\b/.test(messageLower);
+
+    const hasBudget =
+      /\b(under|below|upto|within|less than)\s*₹?\s*\d+([.,]\d+)?\s*(lakh|lakhs|L)?\b/.test(messageLower) ||
+      /\b₹\s*\d+([.,]\d+)?\b/.test(messageLower);
+    const hasFuel = /\b(petrol|diesel|cng|hybrid|ev|electric)\b/.test(messageLower);
+    const hasBody = /\b(suv|hatchback|sedan|mpv|crossover|wagon|crossover|compact)\b/.test(messageLower);
+
+    const needsClarification = isRecommendationRequest ? !(hasBudget && hasFuel && hasBody) : false;
+    const stage: 'search' | 'advisory' = isRecommendationRequest ? 'advisory' : 'search';
+
     const hints = await this.extractSearchHints(message, history);
-    const userSpecifiedCity = !!hints.city;
-    const searchCity = hints.city || city || 'Delhi';
 
     let listings: ListingResponseDto[] = [];
     if (listingIds?.length) {
       listings = await this.searchService.getByIds(listingIds);
     }
-    if (listings.length === 0) {
+    if (listings.length === 0 && searchCity) {
       const query: SearchQueryDto = {
         city: searchCity,
         page: 1,
@@ -231,13 +490,24 @@ export class ChatService {
     }
 
     const reply = await this.getReply(message, {
-      requestCity: city,
+      requestCity,
       effectiveCity: searchCity,
       history,
       listingsCount: listings.length,
-      userSpecifiedCity,
+      userMentionedCity: cityResolution.userMentionedCity,
+      citySource: cityResolution.citySource,
+      stage,
+      needsClarification,
     });
 
-    return { reply, listings };
+    const nextChatState: ChatState = {
+      ...chatState,
+      lastCityMemory: cityResolution.lastCityMemory,
+      resolvedCity: searchCity,
+      citySource: cityResolution.citySource,
+      stage,
+    };
+
+    return { reply, listings, chatState: nextChatState };
   }
 }
