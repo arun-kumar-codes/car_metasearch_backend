@@ -52,7 +52,8 @@ export class ChatService {
   ) {}
 
   private static knownCitiesCache: { cities: string[]; fetchedAtMs: number } | null = null;
-  private static knownCitiesTtlMs = 6 * 60 * 60 * 1000; // 6 hours
+  private static knownCitiesTtlMs = 6 * 60 * 60 * 1000; 
+  private static cityTermIndexCache: { terms: Array<{ term: string; canonical: string }>; fetchedAtMs: number } | null = null;
 
   private async getKnownCities(): Promise<string[]> {
     const now = Date.now();
@@ -69,6 +70,95 @@ export class ChatService {
 
   private normalizeCity(s: string): string {
     return String(s).toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  private static CITY_ALIAS_MAP: Record<string, string> = {
+    'new delhi': 'Delhi',
+    'delhi': 'Delhi',
+    'nct delhi': 'Delhi',
+    'nct of delhi': 'Delhi',
+    'national capital territory of delhi': 'Delhi',
+    'gurgaon': 'Gurgaon',
+    'gurugram': 'Gurgaon',
+    'bangalore': 'Bangalore',
+    'bengaluru': 'Bangalore',
+    'bombay': 'Mumbai',
+    'mumbai': 'Mumbai',
+    'ghaziabad': 'Ghaziabad',
+    'noida': 'Noida',
+    'greater noida': 'Greater Noida',
+    'faridabad': 'Faridabad',
+    'pune': 'Pune',
+    'surat': 'Surat',
+    'hyderabad': 'Hyderabad',
+    'chennai': 'Chennai',
+    'kolkata': 'Kolkata',
+    'ahmedabad': 'Ahmedabad',
+  };
+
+  private escapeRegExp(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private toTitleCase(input: string): string {
+    return input
+      .split(' ')
+      .filter(Boolean)
+      .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  private canonicalizeCityValue(input?: string): string | undefined {
+    if (!input) return undefined;
+    const n = this.normalizeCity(input);
+    if (!n) return undefined;
+    return ChatService.CITY_ALIAS_MAP[n] || this.toTitleCase(n);
+  }
+
+  private async getCityTermIndex(): Promise<Array<{ term: string; canonical: string }>> {
+    const now = Date.now();
+    if (
+      ChatService.cityTermIndexCache &&
+      now - ChatService.cityTermIndexCache.fetchedAtMs < ChatService.knownCitiesTtlMs
+    ) {
+      return ChatService.cityTermIndexCache.terms;
+    }
+
+    const knownCities = await this.getKnownCities().catch(() => []);
+    const termToCanonical = new Map<string, string>();
+
+    const ingestTerm = (raw: string, canonicalHint?: string) => {
+      const term = this.normalizeCity(raw);
+      if (!term || term.length < 3) return;
+      // Drop entries that are clearly not city-like (pure numbers/symbols).
+      if (!/[a-z]/.test(term)) return;
+      const canonical = this.canonicalizeCityValue(canonicalHint || raw) || this.toTitleCase(term);
+      if (!termToCanonical.has(term)) termToCanonical.set(term, canonical);
+    };
+
+    // Seed with common aliases so explicit user mention always works.
+    Object.entries(ChatService.CITY_ALIAS_MAP).forEach(([alias, canonical]) => ingestTerm(alias, canonical));
+
+    for (const entry of knownCities) {
+      const parts = String(entry)
+        .split(',')
+        .map((p) => this.normalizeCity(p))
+        .filter(Boolean);
+
+      const likelyCity = parts.length > 0 ? parts[parts.length - 1] : this.normalizeCity(entry);
+      ingestTerm(likelyCity, likelyCity);
+
+      // Include all comma-separated parts as weak candidates, because some feeds put city mid-string.
+      for (const p of parts) ingestTerm(p, likelyCity);
+    }
+
+    const terms = Array.from(termToCanonical.entries())
+      .map(([term, canonical]) => ({ term, canonical }))
+      // Prefer longer terms first to avoid "noida" beating "greater noida".
+      .sort((a, b) => b.term.length - a.term.length);
+
+    ChatService.cityTermIndexCache = { terms, fetchedAtMs: now };
+    return terms;
   }
 
   private async parseCityDeterministically(message: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string | undefined> {
@@ -115,57 +205,22 @@ export class ChatService {
    * Uses known city list + alias groups to avoid "nearby NCR" bias.
    */
   private async extractLastCityMentionFromMessage(message: string): Promise<string | undefined> {
-    const cities = await this.getKnownCities().catch(() => []);
     if (!message) return undefined;
 
     const msgNormalized = this.normalizeCity(message);
+    const cityTerms = await this.getCityTermIndex().catch(() => []);
+    const candidates: Array<{ canonical: string; index: number; len: number }> = [];
 
-    // Alias groups map common user spellings to canonical cities present in the DB.
-    const aliasGroups: Array<{ variants: string[] }> = [
-      { variants: ['new delhi', 'delhi'] },
-      { variants: ['gurugram', 'gurgaon'] },
-      { variants: ['bengaluru', 'bangalore'] },
-      { variants: ['mumbai', 'bombay'] },
-    ];
-
-    const candidates: Array<{ city: string; index: number }> = [];
-
-    // 1) Direct city substring matches against known city names.
-    for (const c of cities) {
-      const nc = this.normalizeCity(c);
-      if (!nc) continue;
-      const idx = msgNormalized.lastIndexOf(nc);
-      if (idx >= 0) candidates.push({ city: c, index: idx });
-    }
-
-    // 2) Alias variant matches -> map to the best canonical city from known cities.
-    for (const group of aliasGroups) {
-      const normalizedVariants = group.variants.map((v) => this.normalizeCity(v));
-
-      const bestCanonical = (() => {
-        const matches: string[] = [];
-        for (const c of cities) {
-          const nc = this.normalizeCity(c);
-          if (!nc) continue;
-          if (normalizedVariants.some((v) => v && nc.includes(v))) matches.push(c);
-        }
-        if (matches.length === 0) return undefined;
-        matches.sort((a, b) => this.normalizeCity(b).length - this.normalizeCity(a).length);
-        return matches[0];
-      })();
-
-      if (!bestCanonical) continue;
-
-      for (const v of normalizedVariants) {
-        if (!v) continue;
-        const idx = msgNormalized.lastIndexOf(v);
-        if (idx >= 0) candidates.push({ city: bestCanonical, index: idx });
-      }
+    for (const { term, canonical } of cityTerms) {
+      const re = new RegExp(`\\b${this.escapeRegExp(term)}\\b`, 'i');
+      const m = re.exec(msgNormalized);
+      if (!m || m.index < 0) continue;
+      candidates.push({ canonical, index: m.index, len: term.length });
     }
 
     if (candidates.length === 0) return undefined;
-    candidates.sort((a, b) => (b.index - a.index) || (this.normalizeCity(b.city).length - this.normalizeCity(a.city).length));
-    return candidates[0]?.city;
+    candidates.sort((a, b) => (b.index - a.index) || (b.len - a.len));
+    return candidates[0]?.canonical;
   }
 
   /**
@@ -200,9 +255,10 @@ export class ChatService {
 
     // 2) Reset command to website/current location.
     if (resetRequested && requestCity) {
+      const canonicalRequestCity = this.canonicalizeCityValue(requestCity) || requestCity;
       return {
-        resolvedCity: requestCity,
-        lastCityMemory: requestCity,
+        resolvedCity: canonicalRequestCity,
+        lastCityMemory: canonicalRequestCity,
         userMentionedCity: false,
         citySource: 'resetToRequest',
       };
@@ -218,16 +274,8 @@ export class ChatService {
       };
     }
 
-    // 4) Website / location fallback only when no memory exists.
-    if (requestCity) {
-      return {
-        resolvedCity: requestCity,
-        lastCityMemory: chatState?.lastCityMemory,
-        userMentionedCity: false,
-        citySource: 'requestCity',
-      };
-    }
-
+    // 4) No city context: keep it city-agnostic (India-wide), do not silently
+    // force website city. Website city is used only on explicit reset intent.
     return {
       resolvedCity: undefined,
       lastCityMemory: chatState?.lastCityMemory,
@@ -342,7 +390,10 @@ export class ChatService {
     }));
 
     let systemPrompt = SYSTEM_PROMPT_BASE + '\n\n';
-    const cityForReply = effectiveCity || requestCity;
+    // Do not silently fall back to request/web location for normal turns.
+    // requestCity should influence replies only for explicit reset intent.
+    const cityForReply =
+      effectiveCity || (citySource === 'resetToRequest' ? requestCity : undefined);
     const hasLocation = !!cityForReply;
 
     if (userMentionedCity && cityForReply) {
@@ -356,7 +407,7 @@ export class ChatService {
         systemPrompt += `We are using the user's current location/website city (${cityForReply}). Do NOT ask them which city—we already have it.`;
       }
     } else {
-      systemPrompt += `We do not have a city for this chat yet. Ask naturally: "Which city are you looking for cars in?"`;
+      systemPrompt += `No city is set for this chat. Treat this as an India-wide search context. Mention that results are across India and invite the user to share a city for more precise matches.`;
     }
 
     if (stage === 'advisory') {
@@ -476,16 +527,18 @@ export class ChatService {
     if (listingIds?.length) {
       listings = await this.searchService.getByIds(listingIds);
     }
-    if (listings.length === 0 && searchCity) {
-      const query: SearchQueryDto = {
-        city: searchCity,
+    if (listings.length === 0) {
+      // If no city is resolved, run an India-wide search (no city filter).
+      // This avoids silently falling back to website city.
+      const query: any = {
         page: 1,
         limit: 10,
         sortBy: 'price_asc',
       };
+      if (searchCity) query.city = searchCity;
       if (hints.brand) query.brand = hints.brand;
       if (hints.model) query.model = hints.model;
-      const result = await this.searchService.search(query);
+      const result = await this.searchService.search(query as SearchQueryDto);
       listings = result.listings || [];
     }
 
